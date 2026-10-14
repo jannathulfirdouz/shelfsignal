@@ -5,6 +5,7 @@ import { Progress } from "@/components/ui/progress";
 import { parseCsv, coerce } from "@/lib/csv";
 import { ENTITY_FIELDS, IMPORTABLE_ENTITIES, autoMap } from "@/lib/entityFields";
 import { TrustBadge } from "@/components/TrustBadge";
+import { ImportStatusBadge } from "@/components/ImportStatusBadge";
 import { SimulatedTag } from "@/components/SimulatedTag";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -23,6 +24,7 @@ export function ImportFlow() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [progress, setProgress] = useState({ done: 0, total: 0 });
+  const [batchId, setBatchId] = useState("");
   const fileRef = useRef(null);
   const sendChunk = useServerFn(importChunk);
   const finalize = useServerFn(finalizeImport);
@@ -42,6 +44,7 @@ export function ImportFlow() {
     setMapping({});
     setResult(null);
     setError("");
+    setBatchId("");
   }
 
   async function onFile(e) {
@@ -77,21 +80,37 @@ export function ImportFlow() {
 
   const CHUNK_SIZE = 500;
 
+  // Imports every chunk. Chunks whose rows already exist are skipped server-side (by txn_id for
+  // sales, date+store+sku for inventory), so running this again on the same file resumes safely.
+  // `batchId` is kept after the first run so a resume updates the same DataBatch.
   async function doImport() {
     setBusy(true);
     setError("");
     setProgress({ done: 0, total: rows.length });
     let passed = 0;
+    let failedMessage = "";
     try {
       for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
         const chunk = rows.slice(i, i + CHUNK_SIZE).map(mapRow);
         const res = await sendChunk({ data: { entity, rows: chunk } });
-        passed += res.passed;
+        passed += res.passed + (res.skipped || 0);
         setProgress({ done: Math.min(i + CHUNK_SIZE, rows.length), total: rows.length });
+        if (res.error) {
+          failedMessage = res.error;
+          break;
+        }
       }
       const summary = await finalize({
-        data: { entity, fileName, rowsIn: rows.length, rowsPassed: passed },
+        data: {
+          entity,
+          fileName,
+          rowsIn: rows.length,
+          rowsPassed: passed,
+          batchId: batchId || undefined,
+          errorMessage: failedMessage || undefined,
+        },
       });
+      setBatchId(summary.batch_id);
       setResult(summary);
       setStep(3);
     } catch (err) {
@@ -235,7 +254,14 @@ export function ImportFlow() {
         </div>
       )}
 
-      {step === 3 && result && <ImportResult result={result} entity={entity} onRestart={restart} />}
+      {step === 3 && result && (
+        <ImportResult
+          result={result}
+          entity={entity}
+          onRestart={restart}
+          onResume={() => setStep(2)}
+        />
+      )}
     </div>
   );
 }
@@ -280,7 +306,7 @@ function EntityPicker({ onPick }) {
   );
 }
 
-function ImportResult({ result, entity, onRestart }) {
+function ImportResult({ result, entity, onRestart, onResume }) {
   const ok = result.status === "completed";
   return (
     <Card>
@@ -293,22 +319,36 @@ function ImportResult({ result, entity, onRestart }) {
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex flex-wrap items-center gap-3">
+          <ImportStatusBadge status={result.status} />
           <TrustBadge score={result.trust_score} />
           <span className="rounded-md bg-muted px-2.5 py-1 text-xs font-medium">{entity}</span>
           <span className="text-sm text-muted-foreground">Batch {result.batch_id.slice(0, 8)}…</span>
         </div>
+        {result.error_message && (
+          <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+            <p className="font-medium">Import stopped with this error:</p>
+            <p className="mt-1 break-words">{result.error_message}</p>
+          </div>
+        )}
         <div className="grid grid-cols-3 gap-4">
           <Stat label="Rows in" value={result.rows_in} />
-          <Stat label="Rows passed" value={result.rows_passed} />
-          <Stat label="Trust score" value={`${result.trust_score}%`} />
+          <Stat label="Rows imported" value={result.rows_passed} />
+          <Stat label="Trust score" value={result.trust_score == null ? "—" : `${result.trust_score}%`} />
         </div>
         <p className="text-sm text-muted-foreground">
-          The trust score reflects the share of rows that passed validation. Simulated fields are flagged wherever they
-          appear across the app.
+          Import status shows whether rows were saved. Trust is calculated only from rows that were imported, and will
+          later be based on data quality rules. Simulated fields are flagged wherever they appear across the app.
         </p>
-        <Button onClick={onRestart} variant="outline">
-          Import another file
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          {!ok && (
+            <Button onClick={onResume}>
+              Resume import — retry only the remaining rows
+            </Button>
+          )}
+          <Button onClick={onRestart} variant="outline">
+            Import another file
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );

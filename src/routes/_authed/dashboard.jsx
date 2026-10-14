@@ -3,6 +3,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { getDashboardData } from "@/lib/server-fns";
 import { useAuth } from "@/lib/AuthContext";
 import { TrustBadge } from "@/components/TrustBadge";
+import { ImportStatusBadge } from "@/components/ImportStatusBadge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { ShieldCheck, ShoppingBag, AlertTriangle, Package, Users, Database, Store } from "lucide-react";
 
@@ -69,7 +70,9 @@ function Dashboard() {
                     {data.recentBatches.map((b) => (
                       <tr key={b.id} className="border-t border-border">
                         <td className="py-2.5">{b.file_name}</td>
-                        <td className="py-2.5 capitalize">{b.status}</td>
+                        <td className="py-2.5">
+                          <ImportStatusBadge status={b.status} />
+                        </td>
                         <td className="py-2.5">
                           {b.rows_passed}/{b.rows_in}
                         </td>
@@ -94,7 +97,7 @@ function Dashboard() {
           </CardHeader>
           <CardContent className="space-y-3 text-sm text-muted-foreground">
             <p>
-              Average batch trust score:{" "}
+              Average trust score (imported rows only, failed imports excluded):{" "}
               <span className="font-semibold text-foreground">
                 {data.avgTrust != null ? `${data.avgTrust}%` : "—"}
               </span>
