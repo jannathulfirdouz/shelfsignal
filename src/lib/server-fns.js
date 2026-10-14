@@ -205,8 +205,7 @@ export const listUsersForAdmin = createServerFn({ method: "GET" })
       throw Object.assign(new Error("Owners only"), { status: 403 });
     }
     const admin = context.getBase44().asServiceRole;
-    const page = await admin.entities.User.list({ limit: 100 });
-    const items = page.items ?? page ?? [];
+    const items = await admin.entities.User.list("-created_date", 100);
     return items.map((u) => ({
       id: u.id,
       email: u.email,
