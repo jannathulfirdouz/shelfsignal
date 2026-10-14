@@ -41,9 +41,16 @@ export const getDashboardData = createServerFn({ method: "GET" })
     const b = context.getBase44();
     const safe = (p) => p.catch(() => null);
 
+    // Explicit role/store scope, mirroring the SalesTransaction read rule: store managers
+    // only count their own store's rows (and nothing if no store is assigned).
+    const scope =
+      userRole(context.user) === "store_manager"
+        ? { store_id: context.user.store_id || context.user.data?.store_id || "__none__" }
+        : {};
+
     const [txCount, quarantined, productCount, customerCount, batchPage] = await Promise.all([
-      safe(b.entities.SalesTransaction.count({})),
-      safe(b.entities.SalesTransaction.count({ is_quarantined: true })),
+      safe(b.entities.SalesTransaction.count({ ...scope })),
+      safe(b.entities.SalesTransaction.count({ ...scope, is_quarantined: true })),
       safe(b.entities.Product.count({})),
       safe(b.entities.Customer.count({})),
       safe(b.entities.DataBatch.filter({}, { sort: "-created_date", limit: 6 })),
