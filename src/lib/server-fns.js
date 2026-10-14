@@ -54,7 +54,9 @@ export const getDashboardData = createServerFn({ method: "GET" })
     ]);
 
     const batches = batchPage?.items ?? [];
+    // Failed batches (nothing imported) are excluded from the average trust score.
     const trustValues = batches
+      .filter((x) => x.status !== "failed" && (x.rows_passed ?? 0) > 0)
       .map((x) => x.trust_score)
       .filter((v) => typeof v === "number");
     const avgTrust =
@@ -89,6 +91,34 @@ const ChunkInput = z.object({
   rows: z.array(z.record(z.any())).max(500),
 });
 
+// Natural key used to skip rows that already exist, so a resumed import never duplicates.
+const NATURAL_KEY = {
+  SalesTransaction: ["txn_id"],
+  InventorySnapshot: ["date", "store_id", "sku"],
+};
+
+const keyOf = (row, fields) => fields.map((f) => String(row[f] ?? "")).join("|");
+
+// Finds which of the chunk's rows already exist. Reads of SalesTransaction/InventorySnapshot
+// MUST go through storeScope(); importers (owner/analyst) get {} = all stores.
+async function existingKeys(entity, entityName, rows, scope) {
+  const fields = NATURAL_KEY[entityName];
+  const found = new Set();
+  const first = fields[0];
+  const values = [...new Set(rows.map((r) => r[first]).filter((v) => v != null && v !== ""))];
+  if (values.length === 0) return found;
+  let cursor;
+  do {
+    const page = await entity.filter(
+      { ...scope, [first]: { $in: values } },
+      { limit: 1000, cursor, fields }
+    );
+    for (const it of page.items ?? []) found.add(keyOf(it, fields));
+    cursor = page.has_more ? page.next_cursor : undefined;
+  } while (cursor);
+  return found;
+}
+
 export const importChunk = createServerFn({ method: "POST" })
   .middleware([requireUser])
   .validator(ChunkInput)
@@ -96,11 +126,34 @@ export const importChunk = createServerFn({ method: "POST" })
     assertCanImport(context.user);
     const entity = context.getBase44().entities[data.entity];
     if (!entity) throw new Error("Unknown entity");
+
+    let toInsert = data.rows;
+    let skipped = 0;
+    const fields = NATURAL_KEY[data.entity];
+    if (fields) {
+      const scope = storeScope(context.user);
+      const existing = await existingKeys(entity, data.entity, data.rows, scope);
+      const seen = new Set();
+      toInsert = data.rows.filter((r) => {
+        const k = keyOf(r, fields);
+        if (existing.has(k) || seen.has(k)) {
+          // Already stored (resume) — count it as imported, but never insert it twice.
+          // Duplicates inside the same chunk are inserted once only when not yet stored.
+          return false;
+        }
+        seen.add(k);
+        return true;
+      });
+      skipped = data.rows.length - toInsert.length;
+    }
+
+    if (toInsert.length === 0) return { passed: 0, skipped, error: null };
     try {
-      const res = await entity.bulkCreate(data.rows);
-      return { passed: Array.isArray(res) ? res.length : data.rows.length };
-    } catch {
-      return { passed: 0 };
+      const res = await entity.bulkCreate(toInsert);
+      return { passed: Array.isArray(res) ? res.length : toInsert.length, skipped, error: null };
+    } catch (err) {
+      const message = err?.data?.message || err?.message || "Unknown error";
+      return { passed: 0, skipped, error: `${message}${err?.status ? ` (HTTP ${err.status})` : ""}` };
     }
   });
 
@@ -109,7 +162,16 @@ const FinalizeInput = z.object({
   fileName: z.string().min(1).max(300),
   rowsIn: z.number().int().min(0),
   rowsPassed: z.number().int().min(0),
+  batchId: z.string().optional(),
+  errorMessage: z.string().max(1000).optional(),
 });
+
+// Import status (completed / partial / failed) is separate from trust. Trust is only
+// calculated from rows that were actually imported; a failed import has no trust score.
+// Placeholder until data-quality rules exist: share of imported rows (100 when any imported).
+function trustFor(rowsPassed) {
+  return rowsPassed > 0 ? 100 : null;
+}
 
 export const finalizeImport = createServerFn({ method: "POST" })
   .middleware([requireUser])
@@ -119,30 +181,50 @@ export const finalizeImport = createServerFn({ method: "POST" })
     const user = context.user;
     assertCanImport(user);
 
-    const batchId = crypto.randomUUID();
     const { rowsIn, rowsPassed } = data;
-    const status = rowsPassed === rowsIn ? "completed" : rowsPassed > 0 ? "partial" : "failed";
-    const trustScore = rowsIn > 0 ? Math.round((rowsPassed / rowsIn) * 100) : 0;
-
-    await b.entities.DataBatch.create({
-      batch_id: batchId,
-      file_name: data.fileName,
-      uploaded_by: user.email || user.id,
+    const status = rowsPassed >= rowsIn ? "completed" : rowsPassed > 0 ? "partial" : "failed";
+    const trustScore = trustFor(rowsPassed);
+    const fields = {
       rows_in: rowsIn,
       rows_passed: rowsPassed,
       trust_score: trustScore,
       status,
-      created_at: new Date().toISOString(),
-    });
+      error_message: data.errorMessage || "",
+    };
+
+    let batchId = data.batchId;
+    if (batchId) {
+      const found = await b.entities.DataBatch.filter({ batch_id: batchId }, { limit: 1 });
+      const existing = found?.items?.[0];
+      if (existing) await b.entities.DataBatch.update(existing.id, fields);
+      else batchId = undefined;
+    }
+    if (!batchId) {
+      batchId = crypto.randomUUID();
+      await b.entities.DataBatch.create({
+        batch_id: batchId,
+        file_name: data.fileName,
+        uploaded_by: user.email || user.id,
+        created_at: new Date().toISOString(),
+        ...fields,
+      });
+    }
 
     await writeAudit(b, user, {
-      action: "import",
+      action: data.batchId ? "import_resume" : "import",
       entity: data.entity,
       record_ref: batchId,
-      detail: `${rowsPassed}/${rowsIn} rows — trust ${trustScore}`,
+      detail: `${rowsPassed}/${rowsIn} rows — ${status}${data.errorMessage ? ` — ${data.errorMessage}` : ""}`,
     });
 
-    return { batch_id: batchId, rows_in: rowsIn, rows_passed: rowsPassed, trust_score: trustScore, status };
+    return {
+      batch_id: batchId,
+      rows_in: rowsIn,
+      rows_passed: rowsPassed,
+      trust_score: trustScore,
+      status,
+      error_message: data.errorMessage || "",
+    };
   });
 
 // ---- Role / profile management ---------------------------------------------
