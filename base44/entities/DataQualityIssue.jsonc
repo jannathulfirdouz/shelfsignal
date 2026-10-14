@@ -1,0 +1,96 @@
+{
+  "name": "DataQualityIssue",
+  "type": "object",
+  "properties": {
+    "batch_id": {
+      "type": "string"
+    },
+    "rule_name": {
+      "type": "string"
+    },
+    "dimension": {
+      "type": "string",
+      "enum": [
+        "completeness",
+        "validity",
+        "uniqueness",
+        "consistency",
+        "timeliness",
+        "accuracy"
+      ]
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "critical",
+        "warning"
+      ]
+    },
+    "failed_count": {
+      "type": "number"
+    },
+    "checked_count": {
+      "type": "number"
+    },
+    "sample_record_refs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "open",
+        "resolved",
+        "accepted"
+      ],
+      "default": "open"
+    },
+    "created_at": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "batch_id",
+    "rule_name",
+    "dimension",
+    "severity"
+  ],
+  "rls": {
+    "read": {},
+    "create": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    }
+  }
+}

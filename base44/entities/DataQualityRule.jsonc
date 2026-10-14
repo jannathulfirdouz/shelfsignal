@@ -1,0 +1,64 @@
+{
+  "name": "DataQualityRule",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "dimension": {
+      "type": "string",
+      "enum": [
+        "completeness",
+        "validity",
+        "uniqueness",
+        "consistency",
+        "timeliness",
+        "accuracy"
+      ]
+    },
+    "entity": {
+      "type": "string"
+    },
+    "field": {
+      "type": "string"
+    },
+    "check_description": {
+      "type": "string"
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "critical",
+        "warning"
+      ]
+    },
+    "active": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "required": [
+    "name",
+    "dimension",
+    "entity",
+    "severity"
+  ],
+  "rls": {
+    "read": {},
+    "create": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    }
+  }
+}

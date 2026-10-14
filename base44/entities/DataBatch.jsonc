@@ -33,6 +33,25 @@
     },
     "created_at": {
       "type": "string"
+    },
+    "quality_score": {
+      "type": "number"
+    },
+    "accuracy_pass_rate": {
+      "type": "number"
+    },
+    "rows_excluded": {
+      "type": "number"
+    },
+    "last_checked_at": {
+      "type": "string"
+    },
+    "quality_status": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "incomplete"
+      ]
     }
   },
   "required": [

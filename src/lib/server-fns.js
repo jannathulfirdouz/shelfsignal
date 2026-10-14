@@ -45,12 +45,15 @@ export const getDashboardData = createServerFn({ method: "GET" })
     // Required for any SalesTransaction/InventorySnapshot read: see store-scope.server.js.
     const scope = storeScope(context.user);
 
-    const [txCount, quarantined, productCount, customerCount, batchPage] = await Promise.all([
-      safe(b.entities.SalesTransaction.count({ ...scope })),
+    // Transactions and revenue exclude quarantined rows.
+    const clean = { ...scope, is_quarantined: { $ne: true } };
+    const [txCount, quarantined, productCount, customerCount, batchPage, revenueAgg] = await Promise.all([
+      safe(b.entities.SalesTransaction.count(clean)),
       safe(b.entities.SalesTransaction.count({ ...scope, is_quarantined: true })),
       safe(b.entities.Product.count({})),
       safe(b.entities.Customer.count({})),
       safe(b.entities.DataBatch.filter({}, { sort: "-created_date", limit: 6 })),
+      safe(b.entities.SalesTransaction.aggregate({ query: clean, groupBy: "unit_price", sum: "qty", limit: 1000 })),
     ]);
 
     const batches = batchPage?.items ?? [];
@@ -64,7 +67,13 @@ export const getDashboardData = createServerFn({ method: "GET" })
         ? Math.round(trustValues.reduce((a, c) => a + c, 0) / trustValues.length)
         : null;
 
+    // Revenue = sum(qty x unit_price) over non-quarantined rows (GBP). Exact when the
+    // number of distinct prices fits in one aggregate; flagged when it does not.
+    const revenue = (revenueAgg?.rows ?? []).reduce((a, r) => a + (Number(r.unit_price) || 0) * (Number(r.sum_qty) || 0), 0);
+
     return {
+      revenue: Math.round(revenue * 100) / 100,
+      revenueTruncated: Boolean(revenueAgg?.truncated),
       counts: {
         transactions: txCount ?? 0,
         quarantined: quarantined ?? 0,

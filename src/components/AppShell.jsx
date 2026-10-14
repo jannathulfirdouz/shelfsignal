@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useRouter } from "@tanstack/react-router";
-import { LayoutDashboard, Upload, ShieldCheck, LogOut, Menu, X, LineChart } from "lucide-react";
+import { LayoutDashboard, Upload, ShieldCheck, LogOut, Menu, X, LineChart, BadgeCheck } from "lucide-react";
 import { useAuth } from "@/lib/AuthContext";
 import { RoleSwitcher } from "@/components/RoleSwitcher";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/import", label: "Import data", icon: Upload, importerOnly: true },
+  { to: "/data-quality", label: "Data quality", icon: BadgeCheck },
   { to: "/admin", label: "Admin", icon: ShieldCheck, ownerOnly: true },
 ];
 

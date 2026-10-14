@@ -3,9 +3,10 @@ import { useServerFn } from "@tanstack/react-start";
 import { getDashboardData } from "@/lib/server-fns";
 import { useAuth } from "@/lib/AuthContext";
 import { TrustBadge } from "@/components/TrustBadge";
+import { DataTrustBadge } from "@/components/DataTrustBadge";
 import { ImportStatusBadge } from "@/components/ImportStatusBadge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { ShieldCheck, ShoppingBag, AlertTriangle, Package, Users, Database, Store } from "lucide-react";
+import { ShieldCheck, ShoppingBag, AlertTriangle, Package, Users, Database, Store, PoundSterling } from "lucide-react";
 
 export const Route = createFileRoute("/_authed/dashboard")({
   ssr: false,
@@ -31,16 +32,20 @@ function Dashboard() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-semibold md:text-3xl">Dashboard</h1>
-        <p className="mt-1 text-muted-foreground">
-          Signed in as <span className="font-medium capitalize">{role.replace("_", " ")}</span>
-          {role === "store_manager" && user?.store_id ? ` · ${user.store_id}` : ""}. All figures in GBP (£).
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold md:text-3xl">Dashboard</h1>
+          <p className="mt-1 text-muted-foreground">
+            Signed in as <span className="font-medium capitalize">{role.replace("_", " ")}</span>
+            {role === "store_manager" && user?.store_id ? ` · ${user.store_id}` : ""}. All figures in GBP (£).
+          </p>
+        </div>
+        <DataTrustBadge />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard icon={ShoppingBag} label="Transactions" value={data.counts.transactions} />
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <StatCard icon={ShoppingBag} label="Transactions (excl. quarantined)" value={data.counts.transactions} />
+        <StatCard icon={PoundSterling} label="Revenue (excl. quarantined)" value={data.revenue} money />
         <StatCard icon={AlertTriangle} label="Quarantined" value={data.counts.quarantined} tone="amber" />
         <StatCard icon={Package} label="Products" value={data.counts.products} />
         <StatCard icon={Users} label="Customers" value={data.counts.customers} />
@@ -115,7 +120,7 @@ function Dashboard() {
   );
 }
 
-function StatCard({ icon: Icon, label, value, tone }) {
+function StatCard({ icon: Icon, label, value, tone, money }) {
   const iconTone = tone === "amber" ? "bg-amber-50 text-amber-600" : "bg-accent/10 text-accent";
   return (
     <Card>
@@ -125,7 +130,11 @@ function StatCard({ icon: Icon, label, value, tone }) {
         </div>
         <div>
           <p className="text-sm text-muted-foreground">{label}</p>
-          <p className="text-2xl font-semibold">{value?.toLocaleString("en-GB") ?? 0}</p>
+          <p className="text-2xl font-semibold">
+            {money
+              ? (value ?? 0).toLocaleString("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 0 })
+              : value?.toLocaleString("en-GB") ?? 0}
+          </p>
         </div>
       </CardContent>
     </Card>
