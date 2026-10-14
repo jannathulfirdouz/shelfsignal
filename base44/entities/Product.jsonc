@@ -1,0 +1,83 @@
+{
+  "name": "Product",
+  "type": "object",
+  "properties": {
+    "sku": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "first_sale_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "last_sale_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "unit_price": {
+      "type": "number"
+    },
+    "category": {
+      "type": "string"
+    },
+    "supplier_id": {
+      "type": "string"
+    },
+    "unit_cost": {
+      "type": "number"
+    },
+    "unit_cost_is_simulated": {
+      "type": "boolean",
+      "default": false
+    },
+    "days_since_last_sale": {
+      "type": "number"
+    },
+    "active": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "required": [
+    "sku",
+    "name"
+  ],
+  "rls": {
+    "read": {},
+    "create": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    }
+  }
+}

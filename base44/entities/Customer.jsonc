@@ -1,0 +1,70 @@
+{
+  "name": "Customer",
+  "type": "object",
+  "properties": {
+    "customer_ref": {
+      "type": "string"
+    },
+    "country": {
+      "type": "string"
+    },
+    "first_purchase_date": {
+      "type": "string",
+      "format": "date"
+    },
+    "email": {
+      "type": "string",
+      "rls": {
+        "read": {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        }
+      }
+    },
+    "email_is_simulated": {
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "customer_ref",
+    "country"
+  ],
+  "rls": {
+    "read": {},
+    "create": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    }
+  }
+}

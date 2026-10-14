@@ -1,0 +1,116 @@
+{
+  "name": "SalesTransaction",
+  "type": "object",
+  "properties": {
+    "txn_id": {
+      "type": "string"
+    },
+    "invoice_no": {
+      "type": "string"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "txn_datetime": {
+      "type": "string"
+    },
+    "store_id": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "qty": {
+      "type": "number"
+    },
+    "unit_price": {
+      "type": "number"
+    },
+    "customer_ref": {
+      "type": "string"
+    },
+    "channel": {
+      "type": "string",
+      "enum": [
+        "online",
+        "return"
+      ]
+    },
+    "country": {
+      "type": "string"
+    },
+    "batch_id": {
+      "type": "string"
+    },
+    "is_quarantined": {
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "txn_id",
+    "store_id",
+    "sku"
+  ],
+  "rls": {
+    "read": {
+      "$or": [
+        {
+          "data.store_id": "{{user.data.store_id}}"
+        },
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "viewer"
+          }
+        }
+      ]
+    },
+    "create": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    }
+  }
+}

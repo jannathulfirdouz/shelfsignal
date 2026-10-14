@@ -1,0 +1,43 @@
+{
+  "name": "Store",
+  "type": "object",
+  "properties": {
+    "store_id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "region": {
+      "type": "string",
+      "enum": [
+        "STORE_UK",
+        "STORE_EU",
+        "STORE_ROW"
+      ]
+    }
+  },
+  "required": [
+    "store_id",
+    "name",
+    "region"
+  ],
+  "rls": {
+    "read": {},
+    "create": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    }
+  }
+}

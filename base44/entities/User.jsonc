@@ -1,0 +1,19 @@
+{
+  "name": "User",
+  "type": "object",
+  "properties": {
+    "app_role": {
+      "type": "string",
+      "enum": [
+        "owner",
+        "store_manager",
+        "analyst",
+        "viewer"
+      ],
+      "default": "viewer"
+    },
+    "store_id": {
+      "type": "string"
+    }
+  }
+}

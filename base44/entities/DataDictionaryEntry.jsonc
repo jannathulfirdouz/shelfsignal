@@ -1,0 +1,59 @@
+{
+  "name": "DataDictionaryEntry",
+  "type": "object",
+  "properties": {
+    "entity": {
+      "type": "string"
+    },
+    "field": {
+      "type": "string"
+    },
+    "definition": {
+      "type": "string"
+    },
+    "source_type": {
+      "type": "string",
+      "enum": [
+        "Real",
+        "Derived",
+        "Simulated"
+      ]
+    },
+    "sensitivity": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "entity",
+    "field",
+    "definition",
+    "source_type"
+  ],
+  "rls": {
+    "read": {},
+    "create": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "update": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    }
+  }
+}

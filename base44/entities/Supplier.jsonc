@@ -1,0 +1,62 @@
+{
+  "name": "Supplier",
+  "type": "object",
+  "properties": {
+    "supplier_id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "lead_time_days": {
+      "type": "number"
+    },
+    "min_order_qty": {
+      "type": "number"
+    },
+    "is_simulated": {
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "required": [
+    "supplier_id",
+    "name"
+  ],
+  "rls": {
+    "read": {},
+    "create": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    }
+  }
+}

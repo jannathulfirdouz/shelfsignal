@@ -1,0 +1,68 @@
+{
+  "name": "AppUserProfile",
+  "type": "object",
+  "properties": {
+    "user": {
+      "type": "string"
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "owner",
+        "store_manager",
+        "analyst",
+        "viewer"
+      ]
+    },
+    "store_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "user",
+    "role"
+  ],
+  "rls": {
+    "read": {
+      "$or": [
+        {
+          "data.user": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        }
+      ]
+    },
+    "create": {
+      "$or": [
+        {
+          "data.user": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "data.user": "{{user.id}}"
+        },
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    }
+  }
+}
