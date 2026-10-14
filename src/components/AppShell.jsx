@@ -6,7 +6,7 @@ import { RoleSwitcher } from "@/components/RoleSwitcher";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/import", label: "Import data", icon: Upload },
+  { to: "/import", label: "Import data", icon: Upload, importerOnly: true },
   { to: "/admin", label: "Admin", icon: ShieldCheck, ownerOnly: true },
 ];
 
@@ -34,6 +34,7 @@ export function AppShell({ children }) {
   const [open, setOpen] = useState(false);
   const role = user?.app_role || user?.data?.app_role || "viewer";
   const isOwner = role === "owner";
+  const canImport = role === "owner" || role === "analyst";
 
   return (
     <div className="min-h-screen bg-muted/30">
@@ -67,7 +68,7 @@ export function AppShell({ children }) {
             </div>
 
             <nav className="mt-2 flex-1 space-y-1 px-3">
-              {NAV.filter((n) => !n.ownerOnly || isOwner).map((n) => (
+              {NAV.filter((n) => (!n.ownerOnly || isOwner) && (!n.importerOnly || canImport)).map((n) => (
                 <NavItem key={n.to} {...n} onClick={() => setOpen(false)} />
               ))}
             </nav>

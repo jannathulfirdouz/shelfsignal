@@ -29,10 +29,7 @@ function ImportPage() {
       ) : (
         <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border py-20 text-center">
           <Lock className="h-8 w-8 text-muted-foreground" />
-          <p className="font-medium">Read-only access</p>
-          <p className="max-w-sm text-sm text-muted-foreground">
-            Only owners and analysts can import data. Use the role switcher to try the analyst or owner role.
-          </p>
+          <p className="font-medium">You don't have permission to import data</p>
         </div>
       )}
     </div>
