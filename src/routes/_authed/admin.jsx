@@ -24,10 +24,14 @@ function AdminPage() {
   const [stores, setStores] = useState([]);
   const [saving, setSaving] = useState(null);
 
+  function loadStores() {
+    base44.entities.Store.list({ limit: 50 }).then((p) => setStores(p.items ?? [])).catch(() => setStores([]));
+  }
+
   useEffect(() => {
     if (role !== "owner") return;
     listUsers().then(setUsers).catch(() => setUsers([]));
-    base44.entities.Store.list({ limit: 50 }).then((p) => setStores(p.items ?? [])).catch(() => setStores([]));
+    loadStores();
   }, [role]);
 
   if (role !== "owner") {
@@ -41,11 +45,16 @@ function AdminPage() {
   }
 
   async function update(userId, appRole, storeId) {
+    if (appRole === "store_manager" && !storeId) {
+      // Block saving: show the store picker, but keep the previous role until a store is chosen.
+      setUsers((prev) => prev?.map((u) => (u.id === userId ? { ...u, pending_role: appRole } : u)) ?? []);
+      return;
+    }
     setSaving(userId);
     try {
       await setRole({ data: { userId, appRole, storeId: appRole === "store_manager" ? storeId : "" } });
       if (userId === user.id) await refresh();
-      setUsers((prev) => prev?.map((u) => (u.id === userId ? { ...u, app_role: appRole, store_id: storeId } : u)) ?? []);
+      setUsers((prev) => prev?.map((u) => (u.id === userId ? { ...u, app_role: appRole, store_id: storeId, pending_role: undefined } : u)) ?? []);
     } finally {
       setSaving(null);
     }
@@ -92,7 +101,7 @@ function AdminPage() {
                       </td>
                       <td className="py-3">
                         <select
-                          value={u.app_role}
+                          value={u.pending_role || u.app_role}
                           onChange={(e) => update(u.id, e.target.value, u.store_id)}
                           disabled={saving === u.id}
                           className="rounded-md border border-input bg-background px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
@@ -105,10 +114,12 @@ function AdminPage() {
                         </select>
                       </td>
                       <td className="py-3">
-                        {u.app_role === "store_manager" ? (
+                        {(u.pending_role || u.app_role) === "store_manager" ? (
                           <select
                             value={u.store_id}
-                            onChange={(e) => update(u.id, u.app_role, e.target.value)}
+                            onChange={(e) => update(u.id, "store_manager", e.target.value)}
+                            onFocus={loadStores}
+                            onMouseDown={loadStores}
                             disabled={saving === u.id}
                             className="rounded-md border border-input bg-background px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
                           >
@@ -121,6 +132,9 @@ function AdminPage() {
                           </select>
                         ) : (
                           <span className="text-muted-foreground">—</span>
+                        )}
+                        {u.pending_role === "store_manager" && !u.store_id && (
+                          <p className="mt-1 text-xs text-amber-600">Select a store to save this role.</p>
                         )}
                         {saving === u.id && <Loader2 className="ml-2 inline h-3.5 w-3.5 animate-spin" />}
                       </td>

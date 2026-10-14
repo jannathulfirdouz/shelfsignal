@@ -4,7 +4,7 @@ import { getDashboardData } from "@/lib/server-fns";
 import { useAuth } from "@/lib/AuthContext";
 import { TrustBadge } from "@/components/TrustBadge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { ShieldCheck, ShoppingBag, AlertTriangle, Package, Users, Database } from "lucide-react";
+import { ShieldCheck, ShoppingBag, AlertTriangle, Package, Users, Database, Store } from "lucide-react";
 
 export const Route = createFileRoute("/_authed/dashboard")({
   ssr: false,
@@ -17,6 +17,16 @@ function Dashboard() {
   const data = Route.useLoaderData();
   const { user } = useAuth();
   const role = user?.app_role || user?.data?.app_role || "viewer";
+  const storeId = user?.store_id || user?.data?.store_id || "";
+
+  if (role === "store_manager" && !storeId) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border py-20 text-center">
+        <Store className="h-8 w-8 text-muted-foreground" />
+        <p className="font-medium">No store assigned. Ask an owner to assign your store.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">

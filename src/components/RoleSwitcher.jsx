@@ -20,10 +20,14 @@ export function RoleSwitcher({ onApplied }) {
   const [storeId, setStoreId] = useState(user?.store_id || user?.data?.store_id || "");
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
+  function loadStores() {
     base44.entities.Store.list({ limit: 50 })
       .then((page) => setStores(page.items ?? []))
       .catch(() => setStores([]));
+  }
+
+  useEffect(() => {
+    loadStores();
   }, []);
 
   useEffect(() => {
@@ -62,6 +66,8 @@ export function RoleSwitcher({ onApplied }) {
         <select
           value={storeId}
           onChange={(e) => setStoreId(e.target.value)}
+          onFocus={loadStores}
+          onMouseDown={loadStores}
           className={`${selectCls} mt-2 ${!storeId ? "text-sidebar-foreground/50" : ""}`}
         >
           <option value="">Select a store…</option>
@@ -71,6 +77,9 @@ export function RoleSwitcher({ onApplied }) {
             </option>
           ))}
         </select>
+      )}
+      {role === "store_manager" && !storeId && (
+        <p className="mt-1.5 text-[11px] text-amber-300">A store is required for store managers.</p>
       )}
       <button
         onClick={apply}

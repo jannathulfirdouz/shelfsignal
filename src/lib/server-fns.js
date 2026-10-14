@@ -154,6 +154,9 @@ export const setRoleAndStore = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const b = context.getBase44();
     const me = context.user;
+    if (data.appRole === "store_manager" && !data.storeId) {
+      throw Object.assign(new Error("A store is required for the store manager role"), { status: 400 });
+    }
     const isSelf = data.userId === me.id;
     if (!isSelf && userRole(me) !== "owner") {
       throw Object.assign(new Error("Only owners can change other users' roles"), {
