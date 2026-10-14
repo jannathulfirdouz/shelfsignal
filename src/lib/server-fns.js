@@ -133,17 +133,10 @@ export const importChunk = createServerFn({ method: "POST" })
     if (fields) {
       const scope = storeScope(context.user);
       const existing = await existingKeys(entity, data.entity, data.rows, scope);
-      const seen = new Set();
-      toInsert = data.rows.filter((r) => {
-        const k = keyOf(r, fields);
-        if (existing.has(k) || seen.has(k)) {
-          // Already stored (resume) — count it as imported, but never insert it twice.
-          // Duplicates inside the same chunk are inserted once only when not yet stored.
-          return false;
-        }
-        seen.add(k);
-        return true;
-      });
+      // Resume: skip only rows whose key already exists in the database. Rows are never
+      // dropped for matching other rows in the same file — duplicates are imported as-is
+      // so the data quality rules can catch them later.
+      toInsert = data.rows.filter((r) => !existing.has(keyOf(r, fields)));
       skipped = data.rows.length - toInsert.length;
     }
 
