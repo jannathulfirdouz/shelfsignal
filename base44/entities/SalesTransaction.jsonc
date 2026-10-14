@@ -34,11 +34,7 @@
       "type": "string"
     },
     "channel": {
-      "type": "string",
-      "enum": [
-        "online",
-        "return"
-      ]
+      "type": "string"
     },
     "country": {
       "type": "string"
@@ -52,9 +48,7 @@
     }
   },
   "required": [
-    "txn_id",
-    "store_id",
-    "sku"
+    "txn_id"
   ],
   "rls": {
     "read": {

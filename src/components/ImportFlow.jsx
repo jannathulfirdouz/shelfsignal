@@ -1,6 +1,7 @@
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
-import { importEntity } from "@/lib/server-fns";
+import { importChunk, finalizeImport } from "@/lib/server-fns";
+import { Progress } from "@/components/ui/progress";
 import { parseCsv, coerce } from "@/lib/csv";
 import { ENTITY_FIELDS, IMPORTABLE_ENTITIES, autoMap } from "@/lib/entityFields";
 import { TrustBadge } from "@/components/TrustBadge";
@@ -21,8 +22,10 @@ export function ImportFlow() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
+  const [progress, setProgress] = useState({ done: 0, total: 0 });
   const fileRef = useRef(null);
-  const runImport = useServerFn(importEntity);
+  const sendChunk = useServerFn(importChunk);
+  const finalize = useServerFn(finalizeImport);
 
   const fields = entity ? ENTITY_FIELDS[entity] : [];
 
@@ -60,28 +63,39 @@ export function ImportFlow() {
 
   const previewRows = rows.slice(0, 20);
 
-  const mappedRows = useMemo(() => {
-    return rows.map((r) => {
-      const obj = {};
-      for (const f of fields) {
-        const col = mapping[f.name];
-        const raw = col ? r[col] : "";
-        const v = coerce(raw, f.type);
-        if (v !== undefined) obj[f.name] = v;
-      }
-      return obj;
-    });
-  }, [rows, mapping, fields]);
+  function mapRow(r) {
+    const obj = {};
+    for (const f of fields) {
+      const col = mapping[f.name];
+      const v = coerce(col ? r[col] : "", f.type);
+      if (v !== undefined) obj[f.name] = v;
+    }
+    // Sales rows always land unquarantined; quality rules run in a later phase.
+    if (entity === "SalesTransaction") obj.is_quarantined = false;
+    return obj;
+  }
+
+  const CHUNK_SIZE = 500;
 
   async function doImport() {
     setBusy(true);
     setError("");
+    setProgress({ done: 0, total: rows.length });
+    let passed = 0;
     try {
-      const res = await runImport({ data: { entity, rows: mappedRows, fileName } });
-      setResult(res);
+      for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
+        const chunk = rows.slice(i, i + CHUNK_SIZE).map(mapRow);
+        const res = await sendChunk({ data: { entity, rows: chunk } });
+        passed += res.passed;
+        setProgress({ done: Math.min(i + CHUNK_SIZE, rows.length), total: rows.length });
+      }
+      const summary = await finalize({
+        data: { entity, fileName, rowsIn: rows.length, rowsPassed: passed },
+      });
+      setResult(summary);
       setStep(3);
     } catch (err) {
-      setError(err.message || "Import failed");
+      setError(`${err.message || "Import failed"} — ${passed} of ${rows.length} rows were saved before it stopped.`);
     } finally {
       setBusy(false);
     }
@@ -203,9 +217,20 @@ export function ImportFlow() {
             </button>
             <Button onClick={doImport} disabled={busy} className="bg-primary">
               {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ArrowRight className="mr-2 h-4 w-4" />}
-              Import {rows.length} rows
+              Import {rows.length.toLocaleString("en-GB")} rows
             </Button>
           </div>
+          {busy && (
+            <div className="space-y-2 rounded-lg border border-border bg-card p-4">
+              <div className="flex justify-between text-sm">
+                <span className="font-medium">Importing…</span>
+                <span className="text-muted-foreground">
+                  {progress.done.toLocaleString("en-GB")} / {progress.total.toLocaleString("en-GB")} rows
+                </span>
+              </div>
+              <Progress value={progress.total ? (progress.done / progress.total) * 100 : 0} />
+            </div>
+          )}
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
       )}

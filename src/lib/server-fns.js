@@ -70,65 +70,66 @@ export const getDashboardData = createServerFn({ method: "GET" })
     };
   });
 
-// ---- Import -----------------------------------------------------------------
-const ImportInput = z.object({
+// ---- Import (chunked) -------------------------------------------------------
+// The browser sends a file in chunks of up to 500 rows (importChunk), then calls
+// finalizeImport once, which records a single DataBatch + audit entry with the totals.
+function assertCanImport(user) {
+  const role = userRole(user);
+  if (role !== "owner" && role !== "analyst") {
+    throw Object.assign(new Error("Only owners and analysts can import data"), { status: 403 });
+  }
+}
+
+const ChunkInput = z.object({
   entity: z.enum(IMPORTABLE),
-  rows: z.array(z.record(z.any())).max(2000),
-  fileName: z.string().min(1),
+  rows: z.array(z.record(z.any())).max(500),
 });
 
-export const importEntity = createServerFn({ method: "POST" })
+export const importChunk = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .validator(ImportInput)
+  .validator(ChunkInput)
+  .handler(async ({ data, context }) => {
+    assertCanImport(context.user);
+    const entity = context.getBase44().entities[data.entity];
+    if (!entity) throw new Error("Unknown entity");
+    try {
+      const res = await entity.bulkCreate(data.rows);
+      return { passed: Array.isArray(res) ? res.length : data.rows.length };
+    } catch {
+      return { passed: 0 };
+    }
+  });
+
+const FinalizeInput = z.object({
+  entity: z.enum(IMPORTABLE),
+  fileName: z.string().min(1).max(300),
+  rowsIn: z.number().int().min(0),
+  rowsPassed: z.number().int().min(0),
+});
+
+export const finalizeImport = createServerFn({ method: "POST" })
+  .middleware([requireUser])
+  .validator(FinalizeInput)
   .handler(async ({ data, context }) => {
     const b = context.getBase44();
     const user = context.user;
-    const role = userRole(user);
-    if (role !== "owner" && role !== "analyst") {
-      throw Object.assign(new Error("Only owners and analysts can import data"), {
-        status: 403,
-      });
-    }
+    assertCanImport(user);
 
     const batchId = crypto.randomUUID();
-    const rowsIn = data.rows.length;
-    let rowsPassed = 0;
-    let status = "failed";
-
-    const entity = b.entities[data.entity];
-    if (!entity) throw new Error("Unknown entity");
-
-    try {
-      const CHUNK = 500;
-      let created = 0;
-      for (let i = 0; i < data.rows.length; i += CHUNK) {
-        const slice = data.rows.slice(i, i + CHUNK);
-        const res = await entity.bulkCreate(slice);
-        created += Array.isArray(res) ? res.length : slice.length;
-      }
-      rowsPassed = created;
-      status = rowsPassed === rowsIn ? "completed" : rowsPassed > 0 ? "partial" : "failed";
-    } catch {
-      rowsPassed = 0;
-      status = "failed";
-    }
-
+    const { rowsIn, rowsPassed } = data;
+    const status = rowsPassed === rowsIn ? "completed" : rowsPassed > 0 ? "partial" : "failed";
     const trustScore = rowsIn > 0 ? Math.round((rowsPassed / rowsIn) * 100) : 0;
 
-    try {
-      await b.entities.DataBatch.create({
-        batch_id: batchId,
-        file_name: data.fileName,
-        uploaded_by: user.email || user.id,
-        rows_in: rowsIn,
-        rows_passed: rowsPassed,
-        trust_score: trustScore,
-        status,
-        created_at: new Date().toISOString(),
-      });
-    } catch {
-      /* best-effort */
-    }
+    await b.entities.DataBatch.create({
+      batch_id: batchId,
+      file_name: data.fileName,
+      uploaded_by: user.email || user.id,
+      rows_in: rowsIn,
+      rows_passed: rowsPassed,
+      trust_score: trustScore,
+      status,
+      created_at: new Date().toISOString(),
+    });
 
     await writeAudit(b, user, {
       action: "import",
