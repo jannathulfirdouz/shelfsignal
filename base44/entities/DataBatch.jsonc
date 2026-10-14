@@ -28,6 +28,9 @@
         "failed"
       ]
     },
+    "error_message": {
+      "type": "string"
+    },
     "created_at": {
       "type": "string"
     }
@@ -54,9 +57,18 @@
       ]
     },
     "update": {
-      "user_condition": {
-        "data.app_role": "owner"
-      }
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
     },
     "delete": {
       "user_condition": {
