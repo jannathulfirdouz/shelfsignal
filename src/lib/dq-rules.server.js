@@ -16,6 +16,8 @@ export const SEED_RULES = [
     check_description: "customer_ref should not be empty. Kept for sales totals, excluded from customer analysis." },
   { key: "listprice", name: "Price within 50% of list price", dimension: "accuracy", severity: "warning", field: "unit_price",
     check_description: "unit_price within 50% of the product's list price." },
+  { key: "qtyoutlier", name: "Quantity not an outlier", dimension: "accuracy", severity: "warning", field: "qty",
+    check_description: "The absolute value of qty must not be over 10,000. Flagged only; never quarantines." },
   { key: "future", name: "Date not in the future", dimension: "timeliness", severity: "critical", field: "date",
     check_description: "date must not be in the future." },
 ];
@@ -55,13 +57,14 @@ export function evaluateRows(rows, activeKeys, ctx, state) {
     check("qty", !(Number(r.qty) > 0) && !isReturn(r));
     check("price", !(Number(r.unit_price) > 0));
     check("return", isReturn(r));
-    check("cust", !String(r.customer_ref ?? "").trim());
+    check("cust", !String(r.customer_ref ?? "").trim()); // null, empty and whitespace-only all count as missing
 
     const list = ctx.products.get(String(r.sku ?? ""));
     if (activeKeys.has("listprice") && list > 0) {
       const price = Number(r.unit_price);
       check("listprice", !(price >= list * 0.5 && price <= list * 1.5));
     }
+    check("qtyoutlier", Math.abs(Number(r.qty)) > 10000);
     check("future", Boolean(r.date) && String(r.date).slice(0, 10) > ctx.today);
 
     // Only critical rules quarantine; warnings never do.

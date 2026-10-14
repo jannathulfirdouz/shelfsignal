@@ -263,12 +263,13 @@ export const getColumnProfile = createServerFn({ method: "GET" })
     const distinctAgg = await b.entities.SalesTransaction.aggregate({
       query: scope, countDistinct: "sku",
     });
-    const distinctSku = distinctAgg.rows?.[0]?.countDistinct_sku ?? distinctAgg.rows?.[0]?.count_distinct ?? null;
+    const distinctSku = distinctAgg.rows?.[0]?.count_distinct_sku ?? null;
     const out = [];
     for (const col of PROFILE_COLS) {
       const nulls = await b.entities.SalesTransaction.count({
         ...scope,
-        $or: [{ [col]: { $exists: false } }, { [col]: "" }],
+        // Missing = absent, null, empty or whitespace-only.
+        $or: [{ [col]: { $exists: false } }, { [col]: null }, { [col]: { $regex: "^\\s*$" } }],
       });
       out.push({
         column: col,
