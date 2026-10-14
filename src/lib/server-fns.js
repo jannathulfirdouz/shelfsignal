@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth-middleware";
+import { storeScope } from "@/lib/store-scope.server";
 
 const IMPORTABLE = [
   "Store",
@@ -41,12 +42,8 @@ export const getDashboardData = createServerFn({ method: "GET" })
     const b = context.getBase44();
     const safe = (p) => p.catch(() => null);
 
-    // Explicit role/store scope, mirroring the SalesTransaction read rule: store managers
-    // only count their own store's rows (and nothing if no store is assigned).
-    const scope =
-      userRole(context.user) === "store_manager"
-        ? { store_id: context.user.store_id || context.user.data?.store_id || "__none__" }
-        : {};
+    // Required for any SalesTransaction/InventorySnapshot read: see store-scope.server.js.
+    const scope = storeScope(context.user);
 
     const [txCount, quarantined, productCount, customerCount, batchPage] = await Promise.all([
       safe(b.entities.SalesTransaction.count({ ...scope })),

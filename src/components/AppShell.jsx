@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useLocation } from "@tanstack/react-router";
+import { Link, useLocation, useRouter } from "@tanstack/react-router";
 import { LayoutDashboard, Upload, ShieldCheck, LogOut, Menu, X, LineChart } from "lucide-react";
 import { useAuth } from "@/lib/AuthContext";
 import { RoleSwitcher } from "@/components/RoleSwitcher";
@@ -31,6 +31,7 @@ function NavItem({ to, label, icon: Icon, onClick }) {
 
 export function AppShell({ children }) {
   const { user, logout } = useAuth();
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const role = user?.app_role || user?.data?.app_role || "viewer";
   const isOwner = role === "owner";
@@ -74,7 +75,12 @@ export function AppShell({ children }) {
             </nav>
 
             <div className="space-y-3 border-t border-sidebar-border p-4">
-              <RoleSwitcher onApplied={() => setOpen(false)} />
+              <RoleSwitcher
+                onApplied={() => {
+                  setOpen(false);
+                  router.invalidate();
+                }}
+              />
               <div className="flex items-center justify-between">
                 <div className="min-w-0">
                   <p className="truncate text-xs font-medium text-sidebar-foreground">{user?.email || "Signed in"}</p>
