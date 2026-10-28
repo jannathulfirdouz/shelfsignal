@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useRouter } from "@tanstack/react-router";
-import { LayoutDashboard, Upload, ShieldCheck, LogOut, Menu, X, LineChart, BadgeCheck } from "lucide-react";
+import { LayoutDashboard, Upload, ShieldCheck, LogOut, Menu, X, LineChart, BadgeCheck, Home, BarChart3, Boxes } from "lucide-react";
 import { useAuth } from "@/lib/AuthContext";
 import { RoleSwitcher } from "@/components/RoleSwitcher";
 
 const NAV = [
+  { to: "/", label: "Home", icon: Home },
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { to: "/sales", label: "Sales", icon: BarChart3 },
+  { to: "/inventory", label: "Inventory", icon: Boxes },
   { to: "/import", label: "Import data", icon: Upload, importerOnly: true },
   { to: "/data-quality", label: "Data quality", icon: BadgeCheck },
   { to: "/admin", label: "Admin", icon: ShieldCheck, ownerOnly: true },
@@ -42,7 +45,7 @@ export function AppShell({ children }) {
     <div className="min-h-screen bg-muted/30">
       {/* Mobile top bar */}
       <header className="flex items-center justify-between bg-sidebar px-4 py-3 text-sidebar-foreground md:hidden">
-        <Link to="/dashboard" className="flex items-center gap-2 font-semibold">
+        <Link to="/" className="flex items-center gap-2 font-semibold">
           <LineChart className="h-5 w-5 text-accent" />
           ShelfSignal
         </Link>

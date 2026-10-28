@@ -1,0 +1,40 @@
+{
+  "name": "MetricDefinition",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "formula": {
+      "type": "string"
+    },
+    "owner": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "formula"
+  ],
+  "rls": {
+    "read": {},
+    "create": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    }
+  }
+}

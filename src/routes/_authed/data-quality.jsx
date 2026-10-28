@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { getQualityData, setIssueStatus } from "@/lib/dq-fns";
+import { getSummaryStatus } from "@/lib/summary-fns";
+import { RefreshSummariesPanel } from "@/components/dq/RefreshSummariesPanel";
 import { useAuth } from "@/lib/AuthContext";
 import { DataTrustBadge } from "@/components/DataTrustBadge";
 import { RunChecksPanel } from "@/components/dq/RunChecksPanel";
@@ -25,8 +27,12 @@ function DataQualityPage() {
   const router = useRouter();
   const { user } = useAuth();
   const setStatus = useServerFn(setIssueStatus);
+  const getSummary = useServerFn(getSummaryStatus);
   const [busyId, setBusyId] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [summariesAt, setSummariesAt] = useState(null);
+
+  useEffect(() => { getSummary({ data: {} }).then(setSummariesAt).catch(() => {}); }, [refreshKey]);
   const role = user?.app_role || user?.data?.app_role || "viewer";
   const canAct = role === "owner" || role === "analyst";
   const batch = data.batch;
@@ -70,7 +76,12 @@ function DataQualityPage() {
               ))}
             </select>
           </div>
-          {canAct && <RunChecksPanel batchId={batch?.batch_id} onDone={done} />}
+          {canAct && (
+            <div className="flex w-full flex-col gap-3">
+              <RunChecksPanel batchId={batch?.batch_id} onDone={done} />
+              <RefreshSummariesPanel onDone={done} lastRefreshedAt={summariesAt} />
+            </div>
+          )}
         </CardContent>
       </Card>
 
