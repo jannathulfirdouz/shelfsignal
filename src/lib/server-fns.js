@@ -47,11 +47,12 @@ export const getDashboardData = createServerFn({ method: "GET" })
 
     // Transactions and revenue exclude quarantined rows.
     const clean = { ...scope, is_quarantined: { $ne: true } };
-    const [txCount, quarantined, productCount, customerCount, batchPage, revenueAgg] = await Promise.all([
+    const [txCount, quarantined, productCount, customerCount, inventoryCount, batchPage, revenueAgg] = await Promise.all([
       safe(b.entities.SalesTransaction.count(clean)),
       safe(b.entities.SalesTransaction.count({ ...scope, is_quarantined: true })),
       safe(b.entities.Product.count({})),
       safe(b.entities.Customer.count({})),
+      safe(b.entities.InventorySnapshot.count(scope)),
       safe(b.entities.DataBatch.filter({}, { sort: "-created_date", limit: 6 })),
       safe(b.entities.SalesTransaction.aggregate({ query: clean, groupBy: "unit_price", sum: "qty", limit: 1000 })),
     ]);
@@ -79,6 +80,7 @@ export const getDashboardData = createServerFn({ method: "GET" })
         quarantined: quarantined ?? 0,
         products: productCount ?? 0,
         customers: customerCount ?? 0,
+        inventory: inventoryCount ?? 0,
       },
       avgTrust,
       recentBatches: batches,

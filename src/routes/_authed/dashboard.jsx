@@ -6,7 +6,7 @@ import { TrustBadge } from "@/components/TrustBadge";
 import { DataTrustBadge } from "@/components/DataTrustBadge";
 import { ImportStatusBadge } from "@/components/ImportStatusBadge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { ShieldCheck, ShoppingBag, AlertTriangle, Package, Users, Database, Store, PoundSterling } from "lucide-react";
+import { ShieldCheck, ShoppingBag, AlertTriangle, Package, Users, Database, Store, PoundSterling, Warehouse } from "lucide-react";
 
 export const Route = createFileRoute("/_authed/dashboard")({
   ssr: false,
@@ -43,12 +43,13 @@ function Dashboard() {
         <DataTrustBadge />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
         <StatCard icon={ShoppingBag} label="Transactions (excl. quarantined)" value={data.counts.transactions} />
         <StatCard icon={PoundSterling} label="Revenue (excl. quarantined)" value={data.revenue} money />
         <StatCard icon={AlertTriangle} label="Quarantined" value={data.counts.quarantined} tone="amber" />
         <StatCard icon={Package} label="Products" value={data.counts.products} />
         <StatCard icon={Users} label="Customers" value={data.counts.customers} />
+        <StatCard icon={Warehouse} label="Inventory snapshots" value={data.counts.inventory} />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
