@@ -99,3 +99,44 @@ export function scoreFromRules(ruleStats) {
   const score = totalW > 0 ? Math.round((weighted / totalW) * 1000) / 10 : null;
   return { score, passRates };
 }
+
+// Evaluate a single chunk of rows. Unlike evaluateRows, duplicate detection is driven
+// by the caller-supplied dupSet (the txn_ids that are duplicates of an earlier row), so
+// uniqueness works across chunks in a chunked run. Returns per-rule tallies for this
+// chunk plus the set of txn_ids in this chunk with a critical failure (to be quarantined).
+export function evalChunk(rows, activeKeys, ctx, dupSet) {
+  const perRule = {};
+  const criticalTxnIds = new Set();
+  const isReturn = (r) => String(r.invoice_no ?? "").toUpperCase().startsWith("C");
+  for (const r of rows) {
+    const failedHere = [];
+    const check = (key, failed) => {
+      if (!activeKeys.has(key)) return;
+      const s = (perRule[key] ??= { checked: 0, failed: 0, samples: [] });
+      s.checked += 1;
+      if (failed) {
+        s.failed += 1;
+        if (s.samples.length < 10) s.samples.push(r.txn_id);
+        failedHere.push(key);
+      }
+    };
+
+    check("dup", dupSet.has(r.txn_id));
+    check("sku", !ctx.products.has(String(r.sku ?? "")));
+    check("qty", !(Number(r.qty) > 0) && !isReturn(r));
+    check("price", !(Number(r.unit_price) > 0));
+    check("return", isReturn(r));
+    check("cust", !String(r.customer_ref ?? "").trim());
+    const list = ctx.products.get(String(r.sku ?? ""));
+    if (activeKeys.has("listprice") && list > 0) {
+      const price = Number(r.unit_price);
+      check("listprice", !(price >= list * 0.5 && price <= list * 1.5));
+    }
+    check("qtyoutlier", Math.abs(Number(r.qty)) > 10000);
+    check("future", Boolean(r.date) && String(r.date).slice(0, 10) > ctx.today);
+
+    const critical = failedHere.some((key) => SEED_RULES.find((x) => x.key === key)?.severity === "critical");
+    if (critical) criticalTxnIds.add(r.txn_id);
+  }
+  return { perRule, criticalTxnIds };
+}

@@ -2,14 +2,16 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth-middleware";
 import { storeScope } from "@/lib/store-scope.server";
-import { SEED_RULES, evaluateRows, newState, scoreFromRules } from "@/lib/dq-rules.server";
+import { SEED_RULES, scoreFromRules, evalChunk } from "@/lib/dq-rules.server";
 
 const roleOf = (u) => u?.app_role || u?.data?.app_role || "viewer";
 const canRun = (u) => ["owner", "analyst"].includes(roleOf(u));
 const forbid = () => Object.assign(new Error("Only owners and analysts can do this"), { status: 403 });
 const isLimit = (e) => e?.status === 429 || /daily entity write limit/i.test(e?.data?.message || e?.message || "");
 const limitMsg =
-  "Stopped: the app's daily limit of 100,000 record writes was reached. Nothing is lost - run the checks again later and they continue from where they stopped.";
+  "Stopped: the app's daily limit of 100,000 record writes was reached. Run again later to continue from where it stopped.";
+
+const dupKey = (r) => [r.invoice_no, r.sku, r.qty, r.unit_price, r.txn_datetime].map((v) => String(v ?? "")).join("|");
 
 async function ensureRules(b) {
   const page = await b.entities.DataQualityRule.filter({ entity: "SalesTransaction" }, { limit: 50 });
@@ -20,21 +22,6 @@ async function ensureRules(b) {
   if (missing.length) await b.entities.DataQualityRule.bulkCreate(missing);
   const all = await b.entities.DataQualityRule.filter({ entity: "SalesTransaction" }, { limit: 50 });
   return all.items ?? [];
-}
-
-// Reads every sales row once (reads are free; only writes count against the daily limit).
-// MUST go through storeScope(): importers are all-stores, anyone else is restricted.
-async function scanSales(b, user, onPage) {
-  const scope = storeScope(user);
-  let cursor;
-  do {
-    const page = await b.entities.SalesTransaction.filter(scope, {
-      sort: "created_date", limit: 1000, cursor,
-      fields: ["txn_id", "invoice_no", "sku", "qty", "unit_price", "txn_datetime", "customer_ref", "date", "is_quarantined"],
-    });
-    onPage(page.items ?? []);
-    cursor = page.has_more ? page.next_cursor : undefined;
-  } while (cursor);
 }
 
 async function loadProducts(b) {
@@ -48,27 +35,22 @@ async function loadProducts(b) {
   return map;
 }
 
-async function evaluate(b, user) {
-  const rules = (await ensureRules(b)).filter((r) => r.active !== false);
-  const activeKeys = new Set(SEED_RULES.filter((s) => rules.some((r) => r.name === s.name)).map((s) => s.key));
-  const ctx = { products: await loadProducts(b), today: new Date().toISOString().slice(0, 10) };
-  const state = newState();
-  const current = new Map(); // txn_id -> record id + current quarantine flag, only rows that may change
-  const quarantinedNow = new Map();
-  let total = 0;
-  await scanSales(b, user, (rows) => {
-    total += rows.length;
-    evaluateRows(rows, activeKeys, ctx, state);
-    for (const r of rows) quarantinedNow.set(r.txn_id, { id: r.id, q: Boolean(r.is_quarantined) });
-  });
-  const toQuarantine = [];
-  const toRelease = [];
-  for (const [txn, cur] of quarantinedNow) {
-    const should = state.criticalFailed.has(txn);
-    if (should && !cur.q) toQuarantine.push(cur.id);
-    if (!should && cur.q) toRelease.push(cur.id);
+// Collect up to `chunkSize` sales rows by cursor (store-scope applied). Reads are free;
+// only writes count against the daily limit.
+async function readSalesWindow(b, user, cursor, chunkSize, fields) {
+  const scope = storeScope(user);
+  const rows = [];
+  let nextCursor = cursor;
+  let hasMore = true;
+  while (rows.length < chunkSize && hasMore) {
+    const page = await b.entities.SalesTransaction.filter(scope, {
+      sort: "created_date", limit: 1000, cursor: nextCursor, fields,
+    });
+    rows.push(...(page.items ?? []));
+    hasMore = Boolean(page.has_more);
+    nextCursor = page.has_more ? page.next_cursor : null;
   }
-  return { rules, state, total, toQuarantine, toRelease, activeKeys, current };
+  return { rows, nextCursor, hasMore };
 }
 
 // ---- Header trust summary (latest checked sales batch) -----------------------
@@ -89,46 +71,72 @@ export const getTrustSummary = createServerFn({ method: "GET" })
     };
   });
 
-// ---- Estimate (no writes) ---------------------------------------------------
-export const estimateChecks = createServerFn({ method: "POST" })
+// ---- Total row count for the progress bar -----------------------------------
+export const getDqTotal = createServerFn({ method: "GET" })
   .middleware([requireUser])
-  .validator(z.object({ batchId: z.string().min(1).max(100) }))
+  .handler(async ({ context }) => {
+    const b = context.getBase44();
+    return b.entities.SalesTransaction.count(storeScope(context.user));
+  });
+
+// ---- Pass 1: scan one chunk for duplicate keys -------------------------------
+// Returns the chunk's (txn_id, dupKey) pairs. The client builds the global set of
+// duplicate txn_ids across chunks (stateless server, no cross-request state).
+export const runDupChunk = createServerFn({ method: "POST" })
+  .middleware([requireUser])
+  .validator(z.object({ cursor: z.string().optional(), chunkSize: z.number().int().min(500).max(20000).optional() }))
   .handler(async ({ data, context }) => {
     if (!canRun(context.user)) throw forbid();
     const b = context.getBase44();
-    const e = await evaluate(b, context.user);
-    const ruleSummaries = e.rules.length;
-    const writes = e.toQuarantine.length + e.toRelease.length + ruleSummaries + 1;
-    return {
-      batchId: data.batchId,
-      rowsChecked: e.total,
-      rowsToQuarantine: e.toQuarantine.length,
-      rowsToRelease: e.toRelease.length,
-      ruleSummaries,
-      estimatedWrites: writes,
-    };
+    const { rows, nextCursor, hasMore } = await readSalesWindow(
+      b, context.user, data.cursor, data.chunkSize ?? 10000,
+      ["txn_id", "invoice_no", "sku", "qty", "unit_price", "txn_datetime"]
+    );
+    const pairs = rows.map((r) => ({ txn_id: r.txn_id, key: dupKey(r) }));
+    return { pairs, nextCursor, hasMore, count: rows.length };
   });
 
-// ---- Run checks -------------------------------------------------------------
-export const runChecks = createServerFn({ method: "POST" })
+// ---- Pass 2: evaluate one chunk and quarantine changed rows -----------------
+// `dupTxnIds` is the global duplicate set built in pass 1, so the uniqueness rule is
+// correct across chunks. Quarantine writes happen here, per chunk, for rows whose
+// flag actually changes. Writes are kept low: only changed rows + summaries at the end.
+export const runEvalChunk = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .validator(z.object({ batchId: z.string().min(1).max(100) }))
+  .validator(z.object({
+    cursor: z.string().optional(),
+    chunkSize: z.number().int().min(500).max(20000).optional(),
+    dupTxnIds: z.array(z.string()).max(100000),
+  }))
   .handler(async ({ data, context }) => {
-    const user = context.user;
-    if (!canRun(user)) throw forbid();
+    if (!canRun(context.user)) throw forbid();
     const b = context.getBase44();
-    const { batchId } = data;
+    const user = context.user;
 
-    const batchPage = await b.entities.DataBatch.filter({ batch_id: batchId }, { limit: 1 });
-    const batch = batchPage.items?.[0];
-    if (!batch) throw Object.assign(new Error("Batch not found"), { status: 404 });
+    const rules = (await ensureRules(b)).filter((r) => r.active !== false);
+    const activeKeys = new Set(
+      SEED_RULES.filter((s) => rules.some((r) => r.name === s.name)).map((s) => s.key)
+    );
+    const ctx = { products: await loadProducts(b), today: new Date().toISOString().slice(0, 10) };
+    const dupSet = new Set(data.dupTxnIds);
 
-    const e = await evaluate(b, user);
+    const { rows, nextCursor, hasMore } = await readSalesWindow(
+      b, user, data.cursor, data.chunkSize ?? 10000,
+      ["txn_id", "invoice_no", "sku", "qty", "unit_price", "txn_datetime", "customer_ref", "date", "is_quarantined"]
+    );
+
+    const { perRule, criticalTxnIds } = evalChunk(rows, activeKeys, ctx, dupSet);
+
+    const toQuarantine = [];
+    const toRelease = [];
+    for (const r of rows) {
+      const should = criticalTxnIds.has(r.txn_id);
+      if (should && !r.is_quarantined) toQuarantine.push(r.id);
+      if (!should && r.is_quarantined) toRelease.push(r.id);
+    }
+
     let writes = 0;
     let stoppedByLimit = false;
-    let limitError = null;
-
-    // 1. Quarantine flags - only rows whose value actually changes are written.
+    let error = null;
     const setFlag = async (ids, value) => {
       for (let i = 0; i < ids.length && !stoppedByLimit; i += 500) {
         const slice = ids.slice(i, i + 500);
@@ -138,60 +146,100 @@ export const runChecks = createServerFn({ method: "POST" })
         } catch (err) {
           if (!isLimit(err)) throw err;
           stoppedByLimit = true;
-          limitError = limitMsg;
+          error = limitMsg;
         }
       }
     };
-    await setFlag(e.toQuarantine, true);
-    if (!stoppedByLimit) await setFlag(e.toRelease, false);
+    await setFlag(toQuarantine, true);
+    if (!stoppedByLimit) await setFlag(toRelease, false);
 
-    // 2. One issue summary per rule per batch (update in place on re-runs).
+    return {
+      perRule,
+      // On a limit stop, leave the cursor at the chunk start so a resume re-does this
+      // chunk (idempotent for writes); the client discards this chunk's accumulation.
+      nextCursor: stoppedByLimit ? data.cursor : nextCursor,
+      hasMore: stoppedByLimit ? true : hasMore,
+      count: rows.length,
+      writes,
+      excludedInChunk: criticalTxnIds.size,
+      stoppedByLimit,
+      error,
+    };
+  });
+
+// ---- Finalize: combine accumulated per-rule tallies into summaries + score ---
+export const finalizeChecks = createServerFn({ method: "POST" })
+  .middleware([requireUser])
+  .validator(z.object({
+    batchId: z.string().min(1).max(100),
+    perRule: z.record(z.any()),
+    totalRows: z.number().int().min(0),
+    writes: z.number().int().min(0),
+    excluded: z.number().int().min(0),
+  }))
+  .handler(async ({ data, context }) => {
+    if (!canRun(context.user)) throw forbid();
+    const b = context.getBase44();
+    const user = context.user;
+    const { batchId, perRule, totalRows, writes, excluded } = data;
+
+    const batchPage = await b.entities.DataBatch.filter({ batch_id: batchId }, { limit: 1 });
+    const batch = batchPage.items?.[0];
+    if (!batch) throw Object.assign(new Error("Batch not found"), { status: 404 });
+
+    const rules = (await ensureRules(b)).filter((r) => r.active !== false);
+    let extraWrites = 0;
+    let stoppedByLimit = false;
+    let error = null;
+    const stats = [];
+
     const existing = await b.entities.DataQualityIssue.filter({ batch_id: batchId }, { limit: 100 });
     const byRule = new Map((existing.items ?? []).map((x) => [x.rule_name, x]));
-    const stats = [];
-    for (const rule of e.rules) {
+
+    for (const rule of rules) {
       const seed = SEED_RULES.find((s) => s.name === rule.name);
-      const s = (seed && e.state.perRule[seed.key]) || { checked: 0, failed: 0, samples: [] };
-      stats.push({ dimension: rule.dimension, checked: s.checked, failed: s.failed });
+      const s = (seed && perRule[seed.key]) || { checked: 0, failed: 0, samples: [] };
+      stats.push({ dimension: rule.dimension, checked: s.checked || 0, failed: s.failed || 0 });
       if (stoppedByLimit) continue;
       const prev = byRule.get(rule.name);
       const next = {
         batch_id: batchId, rule_name: rule.name, dimension: rule.dimension, severity: rule.severity,
-        failed_count: s.failed, checked_count: s.checked, sample_record_refs: s.samples,
+        failed_count: s.failed || 0, checked_count: s.checked || 0, sample_record_refs: s.samples || [],
       };
       try {
         if (prev) {
           const same =
             prev.failed_count === next.failed_count && prev.checked_count === next.checked_count &&
             JSON.stringify(prev.sample_record_refs ?? []) === JSON.stringify(next.sample_record_refs);
-          if (!same) { await b.entities.DataQualityIssue.update(prev.id, next); writes += 1; }
+          if (!same) { await b.entities.DataQualityIssue.update(prev.id, next); extraWrites += 1; }
         } else {
           await b.entities.DataQualityIssue.create({ ...next, status: "open", created_at: new Date().toISOString() });
-          writes += 1;
+          extraWrites += 1;
         }
       } catch (err) {
         if (!isLimit(err)) throw err;
         stoppedByLimit = true;
-        limitError = limitMsg;
+        error = limitMsg;
       }
     }
 
-    // 3. Trust score saved on the batch (only when the run completed).
     const scored = scoreFromRules(stats.filter((x) => x.dimension !== "accuracy"));
     const acc = stats.filter((x) => x.dimension === "accuracy" && x.checked > 0);
-    const accuracy = acc.length ? Math.round((1 - acc.reduce((a, c) => a + c.failed, 0) / acc.reduce((a, c) => a + c.checked, 0)) * 1000) / 10 : null;
-    const excluded = e.state.criticalFailed.size;
+    const accuracy = acc.length
+      ? Math.round((1 - acc.reduce((a, c) => a + c.failed, 0) / acc.reduce((a, c) => a + c.checked, 0)) * 1000) / 10
+      : null;
+
     if (!stoppedByLimit) {
       try {
         await b.entities.DataBatch.update(batch.id, {
           quality_score: scored.score, accuracy_pass_rate: accuracy, rows_excluded: excluded,
           last_checked_at: new Date().toISOString(), quality_status: "complete",
         });
-        writes += 1;
+        extraWrites += 1;
       } catch (err) {
         if (!isLimit(err)) throw err;
         stoppedByLimit = true;
-        limitError = limitMsg;
+        error = limitMsg;
       }
     }
 
@@ -199,12 +247,13 @@ export const runChecks = createServerFn({ method: "POST" })
       await b.entities.AuditLog.create({
         user: user.email || user.id, role: roleOf(user), action: "run_checks", entity: "SalesTransaction",
         record_ref: batchId, timestamp: new Date().toISOString(),
-        detail: `${e.total} rows checked, ${writes} writes, ${excluded} excluded${stoppedByLimit ? " - STOPPED: daily write limit" : ""}`,
+        detail: `${totalRows} rows checked, ${writes + extraWrites} writes, ${excluded} excluded${stoppedByLimit ? " - STOPPED: daily write limit" : ""}`,
       });
     } catch { /* audit is best-effort */ }
 
     return {
-      complete: !stoppedByLimit, error: limitError, rowsChecked: e.total, writes,
+      complete: !stoppedByLimit, error,
+      rowsChecked: totalRows, writes: writes + extraWrites,
       score: stoppedByLimit ? null : scored.score, rowsExcluded: excluded,
     };
   });
@@ -260,9 +309,7 @@ export const getColumnProfile = createServerFn({ method: "GET" })
     const row = minMax.rows?.[0] ?? {};
     const dateMin = await b.entities.SalesTransaction.filter(scope, { sort: "date", limit: 1, fields: ["date"] });
     const dateMax = await b.entities.SalesTransaction.filter(scope, { sort: "-date", limit: 1, fields: ["date"] });
-    const distinctAgg = await b.entities.SalesTransaction.aggregate({
-      query: scope, countDistinct: "sku",
-    });
+    const distinctAgg = await b.entities.SalesTransaction.aggregate({ query: scope, countDistinct: "sku" });
     const distinctSku = distinctAgg.rows?.[0]?.count_distinct_sku ?? null;
     const out = [];
     for (const col of PROFILE_COLS) {
