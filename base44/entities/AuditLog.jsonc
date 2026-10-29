@@ -34,12 +34,12 @@
     "create": {},
     "update": {
       "user_condition": {
-        "data.app_role": "owner"
+        "data.app_role": "__none__"
       }
     },
     "delete": {
       "user_condition": {
-        "data.app_role": "owner"
+        "data.app_role": "__none__"
       }
     }
   }
