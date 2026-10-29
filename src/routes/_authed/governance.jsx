@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { getGovernanceData, updateDictionaryEntry, getAuditLog, exportAuditLogCsv, getLineage } from "@/lib/governance-fns";
@@ -191,8 +191,8 @@ function LineageTab() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const load = async (k) => { setKpi(k); setLoading(true); try { const r = await getLineageFn({ data: { kpi: k } }); setData(r); } finally { setLoading(false); }; };
-  useState(() => { load("net_revenue"); }, []);
+  const load = async (k) => { setKpi(k); setLoading(true); try { const r = await getLineageFn({ data: { kpi: k } }); setData(r); } finally { setLoading(false); } };
+  useEffect(() => { load("net_revenue"); }, []);
 
   return (
     <Card>
