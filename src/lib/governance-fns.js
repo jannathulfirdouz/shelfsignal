@@ -43,7 +43,10 @@ export const updateDictionaryEntry = createServerFn({ method: "POST" })
     const b = context.getBase44();
     const before = await b.entities.DataDictionaryEntry.get(data.id);
     await b.entities.DataDictionaryEntry.update(data.id, { definition: data.definition, owner: data.owner });
-    await audit(b, context.user, { action: "dictionary_edit", entity: "DataDictionaryEntry", record_ref: data.id, detail: `${before?.entity}.${before?.field}: owner=${data.owner}` });
+    const parts = [];
+    if ((before?.definition || "") !== data.definition) parts.push(`definition: "${(before?.definition || "").slice(0, 40)}" to "${data.definition.slice(0, 40)}"`);
+    if ((before?.owner || "") !== data.owner) parts.push(`owner: ${before?.owner || "—"} to ${data.owner || "—"}`);
+    await audit(b, context.user, { action: "dictionary_edit", entity: "DataDictionaryEntry", record_ref: data.id, detail: `${before?.entity || ""}.${before?.field || ""}: ${parts.join("; ") || "no change"}` });
     return { ok: true };
   });
 

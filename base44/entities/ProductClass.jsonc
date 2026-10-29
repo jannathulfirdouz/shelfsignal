@@ -1,0 +1,109 @@
+{
+  "name": "ProductClass",
+  "type": "object",
+  "properties": {
+    "store_id": {
+      "type": "string"
+    },
+    "sku": {
+      "type": "string"
+    },
+    "abc_class": {
+      "type": "string",
+      "enum": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    "xyz_class": {
+      "type": "string",
+      "enum": [
+        "X",
+        "Y",
+        "Z"
+      ]
+    },
+    "cv": {
+      "type": "number"
+    },
+    "revenue_share": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "store_id",
+    "sku"
+  ],
+  "rls": {
+    "read": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "viewer"
+          }
+        },
+        {
+          "$and": [
+            {
+              "user_condition": {
+                "data.app_role": "store_manager"
+              }
+            },
+            {
+              "data.store_id": "{{user.data.store_id}}"
+            },
+            {
+              "data.store_id": {
+                "$ne": ""
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "create": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    }
+  }
+}

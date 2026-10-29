@@ -1,0 +1,108 @@
+{
+  "name": "Anomaly",
+  "type": "object",
+  "properties": {
+    "store_id": {
+      "type": "string"
+    },
+    "category": {
+      "type": "string"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "expected": {
+      "type": "number"
+    },
+    "actual": {
+      "type": "number"
+    },
+    "z_score": {
+      "type": "number"
+    },
+    "direction": {
+      "type": "string",
+      "enum": [
+        "high",
+        "low"
+      ]
+    }
+  },
+  "required": [
+    "store_id",
+    "category",
+    "date"
+  ],
+  "rls": {
+    "read": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "viewer"
+          }
+        },
+        {
+          "$and": [
+            {
+              "user_condition": {
+                "data.app_role": "store_manager"
+              }
+            },
+            {
+              "data.store_id": "{{user.data.store_id}}"
+            },
+            {
+              "data.store_id": {
+                "$ne": ""
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "create": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    }
+  }
+}

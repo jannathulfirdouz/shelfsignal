@@ -1,0 +1,129 @@
+{
+  "name": "Forecast",
+  "type": "object",
+  "properties": {
+    "run_id": {
+      "type": "string"
+    },
+    "store_id": {
+      "type": "string"
+    },
+    "series_type": {
+      "type": "string",
+      "enum": [
+        "category",
+        "sku"
+      ]
+    },
+    "series_key": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "wape": {
+      "type": "number"
+    },
+    "bias": {
+      "type": "number"
+    },
+    "week_start": {
+      "type": "string",
+      "format": "date"
+    },
+    "predicted_units": {
+      "type": "number"
+    },
+    "lower": {
+      "type": "number"
+    },
+    "upper": {
+      "type": "number"
+    },
+    "is_backtest": {
+      "type": "boolean"
+    },
+    "actual_units": {
+      "type": "number"
+    }
+  },
+  "required": [
+    "run_id",
+    "store_id",
+    "series_type",
+    "series_key",
+    "model",
+    "week_start"
+  ],
+  "rls": {
+    "read": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "viewer"
+          }
+        },
+        {
+          "$and": [
+            {
+              "user_condition": {
+                "data.app_role": "store_manager"
+              }
+            },
+            {
+              "data.store_id": "{{user.data.store_id}}"
+            },
+            {
+              "data.store_id": {
+                "$ne": ""
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "create": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    }
+  }
+}

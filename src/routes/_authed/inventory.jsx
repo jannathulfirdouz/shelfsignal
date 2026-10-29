@@ -1,10 +1,13 @@
+import { useEffect, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { getInventoryAnalytics } from "@/lib/analytics-fns";
+import { getAbcXyzMatrix, getAbcXyzSkus } from "@/lib/ml-fns";
 import { useAuth } from "@/lib/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
 import { SimulatedTag } from "@/components/SimulatedTag";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertTriangle, PackageX, Boxes } from "lucide-react";
 
 export const Route = createFileRoute("/_authed/inventory")({
@@ -104,9 +107,71 @@ function InventoryPage() {
               {data.rows.length === 0 ? <Empty text="No rows." /> : <Table rows={data.rows} kind="all" />}
             </CardContent>
           </Card>
+
+          <AbcXyzCard storeId={search.store || ""} />
         </>
       )}
     </div>
+  );
+}
+
+function AbcXyzCard({ storeId }) {
+  const getMatrix = useServerFn(getAbcXyzMatrix);
+  const getSkus = useServerFn(getAbcXyzSkus);
+  const [matrix, setMatrix] = useState(null);
+  const [cell, setCell] = useState(null);
+  const [skus, setSkus] = useState([]);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => { getMatrix({ data: { storeId: storeId || undefined } }).then(setMatrix).catch(() => setMatrix(null)); }, [storeId]);
+  const open = async (abc, xyz) => { setCell({ abc, xyz }); setLoading(true); try { const r = await getSkus({ data: { storeId: storeId || undefined, abc, xyz } }); setSkus(r); } finally { setLoading(false); } };
+  if (!matrix) return null;
+  const abcRows = ["A", "B", "C"], xyzCols = ["X", "Y", "Z"];
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>ABC-XYZ classification</CardTitle>
+        <CardDescription>Click a cell to list its SKUs. Run from the Models page.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {matrix.total === 0 ? <Empty text="No classification yet — run ABC-XYZ from the Models page." /> : (
+          <div className="overflow-x-auto">
+            <table className="text-sm">
+              <thead><tr><th className="p-2" />{xyzCols.map((x) => <th key={x} className="p-2 text-center text-muted-foreground">{x}</th>)}</tr></thead>
+              <tbody>
+                {abcRows.map((a) => (
+                  <tr key={a}>
+                    <td className="p-2 font-medium text-muted-foreground">{a}</td>
+                    {xyzCols.map((x) => (
+                      <td key={x} className="p-1 text-center"><button onClick={() => open(a, x)} className="h-12 w-20 rounded-md border border-border bg-muted/30 font-medium hover:bg-accent/10">{matrix.matrix[`${a}${x}`] || 0}</button></td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+      <Dialog open={!!cell} onOpenChange={(v) => !v && setCell(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>{cell ? `${cell.abc}${cell.xyz} SKUs` : ""}</DialogTitle></DialogHeader>
+          {loading ? <p className="text-sm text-muted-foreground">Loading…</p> : (
+            <div className="max-h-96 overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="text-left text-muted-foreground"><tr>{["Store", "SKU", "Category", "CV", "Rev share"].map((c) => <th key={c} className="pb-2 pr-4 font-medium">{c}</th>)}</tr></thead>
+                <tbody>
+                  {skus.map((s, i) => (
+                    <tr key={i} className="border-t border-border">
+                      <td className="py-2 pr-4">{s.store_id}</td><td className="py-2 pr-4">{s.sku}</td><td className="py-2 pr-4">{s.category}</td>
+                      <td className="py-2 pr-4">{s.cv}</td><td className="py-2 pr-4">{(s.revenue_share * 100).toFixed(1)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </Card>
   );
 }
 

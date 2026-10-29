@@ -1,13 +1,14 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { getSalesAnalytics } from "@/lib/analytics-fns";
+import { getAnomalies } from "@/lib/ml-fns";
 import { useAuth } from "@/lib/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
 import { PageFilters } from "@/components/PageFilters";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ComposedChart, Bar, Line, Cell, LabelList, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, BarChart } from "recharts";
+import { ComposedChart, Bar, Line, Cell, LabelList, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, BarChart, Scatter } from "recharts";
 
 export const Route = createFileRoute("/_authed/sales")({
   ssr: false,
@@ -33,6 +34,11 @@ function SalesPage() {
 
   const [excludeUK, setExcludeUK] = useState(false);
   const [includeOutliers, setIncludeOutliers] = useState(false);
+
+  const getAnoms = useServerFn(getAnomalies);
+  const [anoms, setAnoms] = useState([]);
+  useEffect(() => { getAnoms({ data: { storeId: search.store } }).then(setAnoms).catch(() => setAnoms([])); }, [search.store]);
+  const anomalyMarks = anoms.map((a) => ({ month: String(a.date).slice(0, 7), anomaly: a.actual }));
 
   const countriesAll = data.topCountries || [];
   const countriesShown = (excludeUK ? countriesAll.filter((c) => c.country !== "United Kingdom") : countriesAll).slice(0, 10);
@@ -67,6 +73,7 @@ function SalesPage() {
                     ))}
                   </Bar>
                   <Line yAxisId="r" dataKey="momChange" stroke="hsl(var(--chart-3))" name="MoM change %" />
+                  {anomalyMarks.length > 0 && <Scatter yAxisId="l" data={anomalyMarks} dataKey="anomaly" fill="hsl(var(--destructive))" name="Anomaly" />}
                 </ComposedChart>
               </ResponsiveContainer>
               {data.partialMonth && (
@@ -175,6 +182,32 @@ function SalesPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader><CardTitle>Anomalies</CardTitle></CardHeader>
+        <CardContent>
+          {anoms.length === 0 ? <Empty /> : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-left text-muted-foreground"><tr>{["Store", "Category", "Date", "Expected", "Actual", "z", "Direction"].map((c) => <th key={c} className="pb-2 pr-4 font-medium">{c}</th>)}</tr></thead>
+                <tbody>
+                  {anoms.map((a, i) => (
+                    <tr key={i} className="border-t border-border">
+                      <td className="py-2 pr-4">{a.store_id}</td>
+                      <td className="py-2 pr-4">{a.category}</td>
+                      <td className="py-2 pr-4">{a.date}</td>
+                      <td className="py-2 pr-4">{fmtGbp(a.expected)}</td>
+                      <td className="py-2 pr-4">{fmtGbp(a.actual)}</td>
+                      <td className="py-2 pr-4">{a.z_score}</td>
+                      <td className="py-2 pr-4"><span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${a.direction === "high" ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>{a.direction}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

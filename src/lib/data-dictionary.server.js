@@ -106,22 +106,22 @@ export const DICTIONARY_CATALOG = [
   { entity: "MetricDefinition", field: "owner", definition: "Metric owner.", owner: "Owner", source: "App", source_type: "Derived", sensitivity: "Internal" },
   { entity: "MetricDefinition", field: "notes", definition: "Metric notes.", owner: "Owner", source: "App", source_type: "Derived", sensitivity: "Internal" },
   // SalesWeeklySummary
-  { entity: "SalesWeeklySummary", field: "week_start", definition: "Week start date (Monday).", owner: "System", source: "Python ETL", source_type: "Derived", sensitivity: "Internal" },
-  { entity: "SalesWeeklySummary", field: "store_id", definition: "Store.", owner: "System", source: "Python ETL", source_type: "Derived", sensitivity: "Internal" },
-  { entity: "SalesWeeklySummary", field: "sku", definition: "Product.", owner: "System", source: "Python ETL", source_type: "Derived", sensitivity: "Public" },
-  { entity: "SalesWeeklySummary", field: "category", definition: "Product category.", owner: "System", source: "Python ETL", source_type: "Derived", sensitivity: "Internal" },
-  { entity: "SalesWeeklySummary", field: "units", definition: "Units sold in the week.", owner: "System", source: "Python ETL", source_type: "Derived", sensitivity: "Internal" },
-  { entity: "SalesWeeklySummary", field: "gross_revenue", definition: "Gross revenue (GBP).", owner: "System", source: "Python ETL", source_type: "Derived", sensitivity: "Internal" },
-  { entity: "SalesWeeklySummary", field: "returns_value", definition: "Returns value (GBP).", owner: "System", source: "Python ETL", source_type: "Derived", sensitivity: "Internal" },
-  { entity: "SalesWeeklySummary", field: "net_revenue", definition: "Net revenue (GBP).", owner: "System", source: "Python ETL", source_type: "Derived", sensitivity: "Internal" },
-  { entity: "SalesWeeklySummary", field: "orders", definition: "Distinct invoices in the week.", owner: "System", source: "Python ETL", source_type: "Derived", sensitivity: "Internal" },
-  { entity: "SalesWeeklySummary", field: "cost", definition: "Cost of goods sold (GBP, simulated).", owner: "System", source: "Python ETL", source_type: "Derived", sensitivity: "Confidential" },
+  { entity: "SalesWeeklySummary", field: "week_start", definition: "Week start date (Monday).", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "SalesWeeklySummary", field: "store_id", definition: "Store.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "SalesWeeklySummary", field: "sku", definition: "Product.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Public" },
+  { entity: "SalesWeeklySummary", field: "category", definition: "Product category.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "SalesWeeklySummary", field: "units", definition: "Units sold in the week.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "SalesWeeklySummary", field: "gross_revenue", definition: "Gross revenue (GBP).", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "SalesWeeklySummary", field: "returns_value", definition: "Returns value (GBP).", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "SalesWeeklySummary", field: "net_revenue", definition: "Net revenue (GBP).", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "SalesWeeklySummary", field: "orders", definition: "Distinct invoices in the week.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "SalesWeeklySummary", field: "cost", definition: "Cost of goods sold (GBP, simulated).", owner: "System", source: "App", source_type: "Derived", sensitivity: "Confidential" },
   // SalesHourSummary
-  { entity: "SalesHourSummary", field: "store_id", definition: "Store.", owner: "System", source: "Python ETL", source_type: "Derived", sensitivity: "Internal" },
-  { entity: "SalesHourSummary", field: "weekday", definition: "Day of week (0 = Sunday).", owner: "System", source: "Python ETL", source_type: "Derived", sensitivity: "Internal" },
-  { entity: "SalesHourSummary", field: "hour", definition: "Hour of day (0-23).", owner: "System", source: "Python ETL", source_type: "Derived", sensitivity: "Internal" },
-  { entity: "SalesHourSummary", field: "net_revenue", definition: "Net revenue (GBP).", owner: "System", source: "Python ETL", source_type: "Derived", sensitivity: "Internal" },
-  { entity: "SalesHourSummary", field: "orders", definition: "Distinct invoices.", owner: "System", source: "Python ETL", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "SalesHourSummary", field: "store_id", definition: "Store.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "SalesHourSummary", field: "weekday", definition: "Day of week (0 = Sunday).", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "SalesHourSummary", field: "hour", definition: "Hour of day (0-23).", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "SalesHourSummary", field: "net_revenue", definition: "Net revenue (GBP).", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "SalesHourSummary", field: "orders", definition: "Distinct invoices.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
   // DataDictionaryEntry
   { entity: "DataDictionaryEntry", field: "entity", definition: "Entity name.", owner: "Owner", source: "App", source_type: "Derived", sensitivity: "Internal" },
   { entity: "DataDictionaryEntry", field: "field", definition: "Field name.", owner: "Owner", source: "App", source_type: "Derived", sensitivity: "Internal" },
@@ -139,10 +139,48 @@ export const DICTIONARY_CATALOG = [
   { entity: "PrivacySetting", field: "retention_months", definition: "Email retention period in months.", owner: "Owner", source: "App", source_type: "Derived", sensitivity: "Internal" },
   { entity: "PrivacySetting", field: "last_applied_at", definition: "Last masking application time.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
   { entity: "PrivacySetting", field: "last_applied_by", definition: "User who last applied masking.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  // Phase 5: ML / forecasting entities
+  { entity: "ForecastRun", field: "run_id", definition: "Forecast run identifier.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "ForecastRun", field: "created_by", definition: "User who ran the forecast.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "ForecastRun", field: "created_at", definition: "Run timestamp.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "ForecastRun", field: "series_count", definition: "Number of series forecast in the run.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "ForecastRun", field: "notes", definition: "Run notes.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Forecast", field: "run_id", definition: "Forecast run this row belongs to.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Forecast", field: "store_id", definition: "Store the series belongs to.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Forecast", field: "series_type", definition: "category or sku.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Forecast", field: "series_key", definition: "Category or SKU the series tracks.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Forecast", field: "model", definition: "Forecasting model used.", owner: "System", source: "App", source_type: "Simulated", sensitivity: "Internal" },
+  { entity: "Forecast", field: "wape", definition: "Weighted absolute percentage error from backtest.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Forecast", field: "bias", definition: "Mean forecast bias from backtest.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Forecast", field: "week_start", definition: "Forecast week start date.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Forecast", field: "predicted_units", definition: "Predicted units for the week.", owner: "System", source: "App", source_type: "Simulated", sensitivity: "Internal" },
+  { entity: "Forecast", field: "lower", definition: "Lower 80% band bound.", owner: "System", source: "App", source_type: "Simulated", sensitivity: "Internal" },
+  { entity: "Forecast", field: "upper", definition: "Upper 80% band bound.", owner: "System", source: "App", source_type: "Simulated", sensitivity: "Internal" },
+  { entity: "Forecast", field: "is_backtest", definition: "True if this row is a backtest prediction.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Forecast", field: "actual_units", definition: "Actual units for the backtest week.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "CustomerSegment", field: "customer_ref", definition: "Customer reference.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "CustomerSegment", field: "store_id", definition: "Store derived from the customer's country.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "CustomerSegment", field: "recency_days", definition: "Days since last purchase before 2011-12-09.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "CustomerSegment", field: "frequency", definition: "Distinct invoices.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "CustomerSegment", field: "monetary", definition: "Net revenue (GBP).", owner: "System", source: "App", source_type: "Derived", sensitivity: "Confidential" },
+  { entity: "CustomerSegment", field: "segment", definition: "Champions, Loyal, At risk or Lost.", owner: "System", source: "App", source_type: "Simulated", sensitivity: "Internal" },
+  { entity: "ProductClass", field: "store_id", definition: "Store.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "ProductClass", field: "sku", definition: "Product.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Public" },
+  { entity: "ProductClass", field: "abc_class", definition: "ABC revenue class (A, B or C).", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "ProductClass", field: "xyz_class", definition: "XYZ variability class (X, Y or Z).", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "ProductClass", field: "cv", definition: "Coefficient of variation of weekly units.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "ProductClass", field: "revenue_share", definition: "Share of store net revenue.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Anomaly", field: "store_id", definition: "Store.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Anomaly", field: "category", definition: "Category.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Anomaly", field: "date", definition: "Flagged trading day.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Anomaly", field: "expected", definition: "Rolling 28-trading-day mean.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Anomaly", field: "actual", definition: "Actual daily net revenue.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Anomaly", field: "z_score", definition: "Standardised deviation from expected.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Anomaly", field: "direction", definition: "high or low.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
 ];
 
 // Create only the (entity, field) pairs not already present. Returns counts.
-export async function seedDictionary(b) {
+async function readAllDict(b) {
   const existing = [];
   let cursor;
   do {
@@ -150,8 +188,31 @@ export async function seedDictionary(b) {
     existing.push(...(page.items ?? []));
     cursor = page.has_more ? page.next_cursor : undefined;
   } while (cursor);
+  return existing;
+}
+
+// Create only the (entity, field) pairs not already present, and repair existing
+// entries whose Owner/Source are blank or whose Source is wrong (summary tables are
+// built by the app, not Python). Returns counts.
+export async function seedDictionary(b) {
+  const existing = await readAllDict(b);
   const have = new Set(existing.map((x) => `${x.entity}|${x.field}`));
   const missing = DICTIONARY_CATALOG.filter((c) => !have.has(`${c.entity}|${c.field}`));
   if (missing.length) await b.entities.DataDictionaryEntry.bulkCreate(missing);
-  return { created: missing.length, total: existing.length + missing.length };
+
+  const catMap = new Map(DICTIONARY_CATALOG.map((c) => [`${c.entity}|${c.field}`, c]));
+  const SUMMARY_ENTITIES = ["SalesWeeklySummary", "SalesHourSummary"];
+  const toUpdate = [];
+  for (const x of existing) {
+    const cat = catMap.get(`${x.entity}|${x.field}`);
+    const patch = {};
+    if ((!x.owner || x.owner === "") && cat?.owner) patch.owner = cat.owner;
+    if ((!x.source || x.source === "") && cat?.source) patch.source = cat.source;
+    if (SUMMARY_ENTITIES.includes(x.entity) && x.source !== "App") patch.source = "App";
+    if (Object.keys(patch).length) toUpdate.push({ id: x.id, ...patch });
+  }
+  if (toUpdate.length) {
+    for (let i = 0; i < toUpdate.length; i += 500) await b.entities.DataDictionaryEntry.bulkUpdate(toUpdate.slice(i, i + 500));
+  }
+  return { created: missing.length, repaired: toUpdate.length, total: existing.length + missing.length };
 }

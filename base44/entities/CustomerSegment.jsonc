@@ -1,0 +1,106 @@
+{
+  "name": "CustomerSegment",
+  "type": "object",
+  "properties": {
+    "customer_ref": {
+      "type": "string"
+    },
+    "store_id": {
+      "type": "string"
+    },
+    "recency_days": {
+      "type": "number"
+    },
+    "frequency": {
+      "type": "number"
+    },
+    "monetary": {
+      "type": "number"
+    },
+    "segment": {
+      "type": "string",
+      "enum": [
+        "Champions",
+        "Loyal",
+        "At risk",
+        "Lost"
+      ]
+    }
+  },
+  "required": [
+    "customer_ref",
+    "store_id",
+    "segment"
+  ],
+  "rls": {
+    "read": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "viewer"
+          }
+        },
+        {
+          "$and": [
+            {
+              "user_condition": {
+                "data.app_role": "store_manager"
+              }
+            },
+            {
+              "data.store_id": "{{user.data.store_id}}"
+            },
+            {
+              "data.store_id": {
+                "$ne": ""
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "create": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    }
+  }
+}

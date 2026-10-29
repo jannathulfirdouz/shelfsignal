@@ -285,11 +285,14 @@ export const setIssueStatus = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     if (!canRun(context.user)) throw forbid();
     const b = context.getBase44();
+    const before = await b.entities.DataQualityIssue.get(data.id);
     await b.entities.DataQualityIssue.update(data.id, { status: data.status });
     try {
+      const prevStatus = before?.status || "open";
       await b.entities.AuditLog.create({
         user: context.user.email || context.user.id, role: roleOf(context.user), action: `issue_${data.status}`,
-        entity: "DataQualityIssue", record_ref: data.id, timestamp: new Date().toISOString(), detail: "",
+        entity: "DataQualityIssue", record_ref: data.id, timestamp: new Date().toISOString(),
+        detail: `${before?.rule_name || "rule"}: ${prevStatus} to ${data.status}`,
       });
     } catch { /* best-effort */ }
     return { ok: true };
