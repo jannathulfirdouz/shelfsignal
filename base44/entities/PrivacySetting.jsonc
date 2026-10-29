@@ -1,0 +1,40 @@
+{
+  "name": "PrivacySetting",
+  "type": "object",
+  "properties": {
+    "retention_months": {
+      "type": "number"
+    },
+    "last_applied_at": {
+      "type": "string"
+    },
+    "last_applied_by": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "retention_months"
+  ],
+  "rls": {
+    "read": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    },
+    "create": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    },
+    "update": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    },
+    "delete": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    }
+  }
+}

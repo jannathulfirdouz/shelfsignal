@@ -21,6 +21,12 @@
     },
     "sensitivity": {
       "type": "string"
+    },
+    "owner": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
     }
   },
   "required": [
@@ -46,9 +52,18 @@
       ]
     },
     "update": {
-      "user_condition": {
-        "data.app_role": "owner"
-      }
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
     },
     "delete": {
       "user_condition": {

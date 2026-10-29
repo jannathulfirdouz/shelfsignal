@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useRouter } from "@tanstack/react-router";
-import { LayoutDashboard, Upload, ShieldCheck, LogOut, Menu, X, LineChart, BadgeCheck, Home, BarChart3, Boxes } from "lucide-react";
+import { LayoutDashboard, Upload, ShieldCheck, LogOut, Menu, X, LineChart, BadgeCheck, Home, BarChart3, Boxes, Scale, Lock } from "lucide-react";
 import { useAuth } from "@/lib/AuthContext";
 import { RoleSwitcher } from "@/components/RoleSwitcher";
 
@@ -11,6 +11,8 @@ const NAV = [
   { to: "/inventory", label: "Inventory", icon: Boxes },
   { to: "/import", label: "Import data", icon: Upload, importerOnly: true },
   { to: "/data-quality", label: "Data quality", icon: BadgeCheck },
+  { to: "/governance", label: "Governance", icon: Scale, govOnly: true },
+  { to: "/privacy", label: "Privacy", icon: Lock, ownerOnly: true },
   { to: "/admin", label: "Admin", icon: ShieldCheck, ownerOnly: true },
 ];
 
@@ -73,7 +75,7 @@ export function AppShell({ children }) {
             </div>
 
             <nav className="mt-2 flex-1 space-y-1 px-3">
-              {NAV.filter((n) => (!n.ownerOnly || isOwner) && (!n.importerOnly || canImport)).map((n) => (
+              {NAV.filter((n) => (!n.ownerOnly || isOwner) && (!n.importerOnly || canImport) && (!n.govOnly || canImport)).map((n) => (
                 <NavItem key={n.to} {...n} onClick={() => setOpen(false)} />
               ))}
             </nav>
