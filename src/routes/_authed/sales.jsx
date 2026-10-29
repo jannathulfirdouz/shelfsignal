@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { getSalesAnalytics } from "@/lib/analytics-fns";
@@ -5,7 +6,8 @@ import { useAuth } from "@/lib/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
 import { PageFilters } from "@/components/PageFilters";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, BarChart } from "recharts";
+import { Button } from "@/components/ui/button";
+import { ComposedChart, Bar, Line, Cell, LabelList, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, BarChart } from "recharts";
 
 export const Route = createFileRoute("/_authed/sales")({
   ssr: false,
@@ -29,6 +31,16 @@ function SalesPage() {
   const search = Route.useSearch();
   const filters = { store: search.store, category: search.category, range: search.range || "all" };
 
+  const [excludeUK, setExcludeUK] = useState(false);
+  const [includeOutliers, setIncludeOutliers] = useState(false);
+
+  const countriesAll = data.topCountries || [];
+  const countriesShown = (excludeUK ? countriesAll.filter((c) => c.country !== "United Kingdom") : countriesAll).slice(0, 10);
+  const countryTotal = countriesShown.reduce((a, c) => a + (c.orders || 0), 0) || 1;
+  const countryRows = countriesShown.map((c) => ({ ...c, sharePct: Math.round((c.orders / countryTotal) * 1000) / 10 }));
+
+  const rrData = (data.returnRateByCategory || []).map((r) => ({ category: r.category, returnRate: includeOutliers ? r.returnRateIncl : r.returnRateExcl }));
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -38,19 +50,31 @@ function SalesPage() {
       />
 
       <Card>
-        <CardHeader><CardTitle>Monthly net revenue (MoM change)</CardTitle></CardHeader>
+        <CardHeader><CardTitle>Monthly net revenue (MoM change %)</CardTitle></CardHeader>
         <CardContent>
           {data.monthly.length === 0 ? <Empty /> : (
-            <ResponsiveContainer width="100%" height={280}>
-              <ComposedChart data={data.monthly}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `£${v}`} />
-                <Tooltip formatter={(v) => fmtGbp(v)} />
-                <Bar dataKey="netRevenue" fill="hsl(var(--accent))" name="Net revenue" />
-                <Line dataKey="momChange" stroke="hsl(var(--chart-3))" name="MoM change %" />
-              </ComposedChart>
-            </ResponsiveContainer>
+            <>
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={data.monthly}>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                  <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                  <YAxis yAxisId="l" domain={[0, "auto"]} tick={{ fontSize: 11 }} tickFormatter={(v) => `£${v}`} />
+                  <YAxis yAxisId="r" orientation="right" tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
+                  <Tooltip formatter={(v, n) => (n === "MoM change %" ? `${v}%` : fmtGbp(v))} />
+                  <Bar yAxisId="l" dataKey="netRevenue" name="Net revenue" radius={[4, 4, 0, 0]}>
+                    {data.monthly.map((m) => (
+                      <Cell key={m.month} fill={m.month === data.partialMonth ? "hsl(var(--accent) / 0.4)" : "hsl(var(--accent))"} />
+                    ))}
+                  </Bar>
+                  <Line yAxisId="r" dataKey="momChange" stroke="hsl(var(--chart-3))" name="MoM change %" />
+                </ComposedChart>
+              </ResponsiveContainer>
+              {data.partialMonth && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {data.partialMonth} is a partial month (1 to 9 Dec only) — shown with a lighter bar.
+                </p>
+              )}
+            </>
           )}
         </CardContent>
       </Card>
@@ -74,16 +98,23 @@ function SalesPage() {
         </Card>
 
         <Card>
-          <CardHeader><CardTitle>Return rate by category</CardTitle></CardHeader>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle>Return rate by category</CardTitle>
+              <Button size="sm" variant={includeOutliers ? "default" : "outline"} onClick={() => setIncludeOutliers((v) => !v)}>
+                {includeOutliers ? "Including outliers" : "Excluding outliers"}
+              </Button>
+            </div>
+          </CardHeader>
           <CardContent>
-            {data.returnRateByCategory.length === 0 ? <Empty /> : (
+            {rrData.length === 0 ? <Empty /> : (
               <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={data.returnRateByCategory} layout="vertical">
+                <BarChart data={rrData} layout="vertical">
                   <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                   <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
                   <YAxis type="category" dataKey="category" tick={{ fontSize: 11 }} width={120} />
                   <Tooltip formatter={(v) => `${v}%`} />
-                  <Bar dataKey="returnRate" fill="hsl(var(--destructive))" name="Return rate %" />
+                  <Bar dataKey="returnRate" fill="hsl(var(--destructive))" name={`Return rate ${includeOutliers ? "(incl. outliers)" : "(excl. outliers)"}`} />
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -112,16 +143,25 @@ function SalesPage() {
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
-          <CardHeader><CardTitle>Top 10 countries by orders</CardTitle></CardHeader>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle>Top 10 countries by orders</CardTitle>
+              <Button size="sm" variant={excludeUK ? "default" : "outline"} onClick={() => setExcludeUK((v) => !v)}>
+                {excludeUK ? "UK excluded" : "Exclude United Kingdom"}
+              </Button>
+            </div>
+          </CardHeader>
           <CardContent>
-            {data.topCountries.length === 0 ? <Empty /> : (
-              <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={data.topCountries}>
+            {countryRows.length === 0 ? <Empty /> : (
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart data={countryRows} layout="vertical">
                   <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                  <XAxis dataKey="country" tick={{ fontSize: 11 }} angle={-30} textAnchor="end" height={60} interval={0} />
-                  <YAxis tick={{ fontSize: 11 }} />
-                  <Tooltip />
-                  <Bar dataKey="count" fill="hsl(var(--chart-4))" name="Orders" />
+                  <XAxis type="number" tick={{ fontSize: 11 }} />
+                  <YAxis type="category" dataKey="country" tick={{ fontSize: 11 }} width={110} />
+                  <Tooltip formatter={(v) => `${v} orders`} />
+                  <Bar dataKey="orders" fill="hsl(var(--chart-4))" name="Orders" radius={[0, 4, 4, 0]}>
+                    <LabelList dataKey="sharePct" position="right" formatter={(v) => `${v}%`} style={{ fontSize: 11 }} />
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -159,7 +199,7 @@ function Heatmap({ data }) {
                 const v = cell.get(`${wd}|${h}`) || 0;
                 const intensity = v / max;
                 return <td key={h} className="p-0.5"><div className="h-5 w-full rounded-sm" style={{ background: v ? `rgba(20,140,140,${0.15 + intensity * 0.85})` : "hsl(var(--muted))" }} title={`${d} ${h}:00 — ${v} orders`} /></td>;
-            })}
+              })}
             </tr>
           ))}
         </tbody>

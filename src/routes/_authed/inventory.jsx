@@ -24,9 +24,9 @@ function InventoryPage() {
   const lockStore = role === "store_manager";
   const search = Route.useSearch();
 
-  const stockout = data.rows.filter((r) => r.stockoutRisk);
   const dead = data.rows.filter((r) => r.deadStock);
   const totalStockValue = data.rows.reduce((a, c) => a + (c.stockValue || 0), 0);
+  const stockoutTotal = (data.outOfStock?.length || 0) + (data.belowLeadTime?.length || 0);
 
   return (
     <div className="space-y-6">
@@ -57,19 +57,31 @@ function InventoryPage() {
         <>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Mini label="Latest snapshot" value={data.latestDate} />
-            <Mini label="SKUs in stock" value={data.rows.length.toLocaleString("en-GB")} />
-            <Mini label="Stockout-risk SKUs" value={stockout.length.toLocaleString("en-GB")} tone="amber" />
+            <Mini label="Store-SKU positions in stock" value={data.positionsInStock.toLocaleString("en-GB")} />
+            <Mini label="Stockout-risk positions" value={stockoutTotal.toLocaleString("en-GB")} tone="amber" />
             <Mini label="Total stock value (cost)" value={fmtGbp(totalStockValue)} />
           </div>
 
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2"><AlertTriangle className="h-5 w-5 text-amber-500" /> Stockout risk</CardTitle>
-              <CardDescription>Stock cover days below the supplier lead time.</CardDescription>
+              <CardTitle className="flex items-center gap-2"><AlertTriangle className="h-5 w-5 text-rose-500" /> Out of stock</CardTitle>
+              <CardDescription>On-hand is zero. Sorted by last 12 weeks' net revenue, highest first.</CardDescription>
             </CardHeader>
             <CardContent>
-              {stockout.length === 0 ? <Empty text="No SKUs at stockout risk." /> : (
-                <Table rows={stockout} kind="stockout" />
+              {(data.outOfStock?.length || 0) === 0 ? <Empty text="No out-of-stock positions." /> : (
+                <StockoutTable rows={data.outOfStock} kind="out" />
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2"><AlertTriangle className="h-5 w-5 text-amber-500" /> Below lead time</CardTitle>
+              <CardDescription>Stock cover days below the supplier lead time. Sorted by last 12 weeks' net revenue, highest first.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {(data.belowLeadTime?.length || 0) === 0 ? <Empty text="No positions below lead time." /> : (
+                <StockoutTable rows={data.belowLeadTime} kind="below" />
               )}
             </CardContent>
           </Card>
@@ -80,9 +92,7 @@ function InventoryPage() {
               <CardDescription>Days since last sale over 90, with stock value at cost.</CardDescription>
             </CardHeader>
             <CardContent>
-              {dead.length === 0 ? <Empty text="No dead stock." /> : (
-                <Table rows={dead} kind="dead" />
-              )}
+              {dead.length === 0 ? <Empty text="No dead stock." /> : <Table rows={dead} kind="dead" />}
             </CardContent>
           </Card>
 
@@ -91,9 +101,7 @@ function InventoryPage() {
               <CardTitle className="flex items-center gap-2"><Boxes className="h-5 w-5 text-accent" /> Latest stock by store & SKU</CardTitle>
             </CardHeader>
             <CardContent>
-              {data.rows.length === 0 ? <Empty text="No rows." /> : (
-                <Table rows={data.rows} kind="all" />
-              )}
+              {data.rows.length === 0 ? <Empty text="No rows." /> : <Table rows={data.rows} kind="all" />}
             </CardContent>
           </Card>
         </>
@@ -113,11 +121,40 @@ function Mini({ label, value, tone }) {
   );
 }
 
+function StockoutTable({ rows, kind }) {
+  const cols = ["Store", "SKU", "Category", "Status", "On-hand", "Cover days", "Lead time", "Last 12w revenue"];
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead className="text-left text-muted-foreground">
+          <tr>{cols.map((c) => <th key={c} className="pb-2 pr-4 font-medium">{c}</th>)}</tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i} className="border-t border-border">
+              <td className="py-2 pr-4">{r.store_id}</td>
+              <td className="py-2 pr-4">{r.sku}</td>
+              <td className="py-2 pr-4">{r.category}</td>
+              <td className="py-2 pr-4">
+                <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${r.stockoutType === "out_of_stock" ? "bg-rose-50 text-rose-700" : "bg-amber-50 text-amber-700"}`}>
+                  {r.stockoutType === "out_of_stock" ? "Out of stock" : "Below lead time"}
+                </span>
+              </td>
+              <td className="py-2 pr-4">{r.on_hand}</td>
+              <td className="py-2 pr-4">{r.coverDays ?? "—"}</td>
+              <td className="py-2 pr-4">{r.leadTime ?? "—"}</td>
+              <td className="py-2 pr-4">{fmtGbp(r.rev12)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function Table({ rows, kind }) {
   const cols = kind === "dead"
     ? ["Store", "SKU", "Category", "Days since sale", "On-hand", "Stock value (cost)"]
-    : kind === "stockout"
-    ? ["Store", "SKU", "Category", "On-hand", "Cover days", "Lead time (days)"]
     : ["Store", "SKU", "Category", "On-hand", "On-order", "Cover days", "Sell-through %"];
   return (
     <div className="overflow-x-auto">
@@ -131,9 +168,6 @@ function Table({ rows, kind }) {
               {kind === "dead" ? <>
                 <td className="py-2 pr-4">{r.store_id}</td><td className="py-2 pr-4">{r.sku}</td><td className="py-2 pr-4">{r.category}</td>
                 <td className="py-2 pr-4">{r.daysSinceLastSale ?? "—"}</td><td className="py-2 pr-4">{r.on_hand}</td><td className="py-2 pr-4">{fmtGbp(r.stockValue)}</td>
-              </> : kind === "stockout" ? <>
-                <td className="py-2 pr-4">{r.store_id}</td><td className="py-2 pr-4">{r.sku}</td><td className="py-2 pr-4">{r.category}</td>
-                <td className="py-2 pr-4">{r.on_hand}</td><td className="py-2 pr-4">{r.coverDays ?? "—"}</td><td className="py-2 pr-4">{r.leadTime ?? "—"}</td>
               </> : <>
                 <td className="py-2 pr-4">{r.store_id}</td><td className="py-2 pr-4">{r.sku}</td><td className="py-2 pr-4">{r.category}</td>
                 <td className="py-2 pr-4">{r.on_hand}</td><td className="py-2 pr-4">{r.on_order}</td><td className="py-2 pr-4">{r.coverDays ?? "—"}</td><td className="py-2 pr-4">{r.sellThrough != null ? `${r.sellThrough}%` : "—"}</td>

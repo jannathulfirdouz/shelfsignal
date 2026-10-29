@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageFilters } from "@/components/PageFilters";
 import { KpiCard } from "@/components/KpiCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { Lightbulb } from "lucide-react";
 
@@ -31,6 +32,7 @@ function HomePage() {
   const role = user?.app_role || user?.data?.app_role || "viewer";
   const lockStore = role === "store_manager";
   const [metricMap, setMetricMap] = useState({});
+  const [includeOutliers, setIncludeOutliers] = useState(false);
 
   const search = Route.useSearch();
   const filters = { store: search.store, category: search.category, range: search.range || "all" };
@@ -43,6 +45,9 @@ function HomePage() {
   const k = data.kpis;
   const p = data.prevKpis;
   const chg = (cur, prev) => (prev != null && prev !== 0 ? Math.round((cur - prev) / Math.abs(prev) * 1000) / 10 : null);
+  const rr = includeOutliers ? k.returnRate?.incl : k.returnRate?.excl;
+  const prevRr = p ? (includeOutliers ? p.returnRate?.incl : p.returnRate?.excl) : null;
+  const rrChange = prevRr != null ? chg(rr, prevRr) : null;
 
   return (
     <div className="space-y-6">
@@ -52,13 +57,20 @@ function HomePage() {
         filters={<PageFilters value={filters} onChange={setFilters} options={data.filters || { stores: [], categories: [] }} lockStore={lockStore} />}
       />
 
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-muted-foreground">Return rate:</span>
+        <Button size="sm" variant={includeOutliers ? "default" : "outline"} onClick={() => setIncludeOutliers((v) => !v)}>
+          {includeOutliers ? "Including outliers" : "Excluding outliers"}
+        </Button>
+      </div>
+
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard label="Net revenue" value={fmtGbp(k.netRevenue)} change={p ? chg(k.netRevenue, p.netRevenue) : null} metric={metricMap["Net revenue"]} />
         <KpiCard label="Gross margin %" value={k.grossMargin != null ? `${k.grossMargin}%` : "—"} change={p ? chg(k.grossMargin, p.grossMargin) : null} metric={metricMap["Gross margin %"]} simulated />
         <KpiCard label="Units sold" value={k.units?.toLocaleString("en-GB")} change={p ? chg(k.units, p.units) : null} metric={metricMap["Units sold"]} />
         <KpiCard label="Orders" value={k.orders?.toLocaleString("en-GB")} change={p ? chg(k.orders, p.orders) : null} metric={metricMap["Orders"]} />
         <KpiCard label="Average order value" value={fmtGbp(k.aov)} change={p ? chg(k.aov, p.aov) : null} metric={metricMap["Average order value"]} />
-        <KpiCard label="Return rate" value={k.returnRate != null ? `${k.returnRate}%` : "—"} change={p ? chg(k.returnRate, p.returnRate) : null} metric={metricMap["Return rate"]} />
+        <KpiCard label="Return rate" value={rr != null ? `${rr}%` : "—"} change={rrChange} metric={metricMap["Return rate"]} note={includeOutliers ? "including outliers" : "excluding outliers"} />
         <KpiCard label="Trust Score" value={k.trustScore != null ? `${k.trustScore}%` : "—"} metric={metricMap["Trust Score"]} />
       </div>
 
