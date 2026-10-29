@@ -22,20 +22,25 @@ async function audit(b, user, { action, entity, record_ref, detail }) {
   try { await b.entities.AuditLog.create({ user: user.email || user.id, role: roleOf(user), action, entity, record_ref: record_ref || "", timestamp: new Date().toISOString(), detail: detail || "" }); } catch { /* best-effort */ }
 }
 
-// Generic diff-upsert: create new, update changed, skip identical. Returns writes.
+// Generic diff-upsert: create new, update changed, skip identical. Dedupes the
+// incoming rows by key (last wins) so a batch never contains the same record
+// twice, strips any accidental id from creates, and dedupes updates by id (last
+// wins) so no two records in a bulkUpdate share an id. Returns writes.
 async function diffUpsert(b, entityName, rows, keyFn, valFields, existingRows) {
   const exMap = new Map(existingRows.map((x) => [keyFn(x), x]));
-  const toCreate = []; const toUpdate = [];
-  for (const row of rows) {
-    const key = keyFn(row);
+  const dedup = new Map();
+  for (const row of rows) dedup.set(keyFn(row), row); // last wins
+  const toCreate = []; const toUpdateMap = new Map();
+  for (const [key, row] of dedup) {
     const ex = exMap.get(key);
-    if (!ex) toCreate.push(row);
+    if (!ex) { const { id, ...rest } = row; toCreate.push(rest); }
     else {
       let diff = false;
       for (const f of valFields) if (ex[f] !== row[f]) { diff = true; break; }
-      if (diff) toUpdate.push({ id: ex.id, ...row });
+      if (diff) toUpdateMap.set(ex.id, { id: ex.id, ...row }); // dedupe by id, last wins
     }
   }
+  const toUpdate = [...toUpdateMap.values()];
   let writes = 0; let stopped = false; let error = null;
   try {
     if (toCreate.length) { for (let i = 0; i < toCreate.length; i += 500) { const s = toCreate.slice(i, i + 500); await b.entities[entityName].bulkCreate(s); writes += s.length; } }
@@ -103,6 +108,10 @@ export const runForecastChunk = createServerFn({ method: "POST" })
     const user = context.user;
 
     if (data.sliceIndex === 0) {
+      // Clean slate: delete any partial Forecast rows left by a previous run so
+      // the re-run starts clean (no stale duplicates). asServiceRole so analysts
+      // can re-run too (Forecast delete is owner-only under RLS).
+      try { await b.asServiceRole.entities.Forecast.deleteMany({ run_id: FORECAST_RUN }); } catch { /* best-effort */ }
       const ex = await b.entities.ForecastRun.filter({ run_id: FORECAST_RUN }, { limit: 1 });
       const now = new Date().toISOString();
       if (ex.items?.[0]) await b.entities.ForecastRun.update(ex.items[0].id, { created_by: user.email || user.id, created_at: now, series_count: data.totalSeries, notes: "" });
@@ -317,10 +326,13 @@ export const prepareAnomaly = createServerFn({ method: "GET" })
     if (!canRun(context.user)) throw forbid();
     const b = context.getBase44();
     const scope = storeScope(context.user);
-    const agg = await b.entities.SalesTransaction.aggregate({ query: { ...scope, is_quarantined: { $ne: true } }, groupBy: "store_id", countDistinct: "category" });
+    // SalesTransaction has no category field. Stores come from transactions; the
+    // store×category series count comes from SalesWeeklySummary (which carries
+    // category), matching the categories the run produces via sku→category.
     const storeAgg = await b.entities.SalesTransaction.aggregate({ query: { ...scope, is_quarantined: { $ne: true } }, groupBy: "store_id" });
     const stores = (storeAgg.rows ?? []).map((r) => r.store_id).filter(Boolean).sort();
-    const seriesCount = (agg.rows ?? []).reduce((a, r) => a + Number(r.count_distinct_category || 0), 0);
+    const catAgg = await b.entities.SalesWeeklySummary.aggregate({ query: scope, groupBy: "store_id", countDistinct: "category" });
+    const seriesCount = (catAgg.rows ?? []).reduce((a, r) => a + Number(r.count_distinct_category || 0), 0);
     return { stores, seriesCount, estimatedWrites: Math.max(seriesCount, 10) };
   });
 
@@ -330,7 +342,8 @@ export const runAnomalyStore = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     if (!canRun(context.user)) throw forbid();
     const b = context.getBase44();
-    const txns = await readAll(b, "SalesTransaction", { store_id: data.storeId, is_quarantined: { $ne: true } }, ["date", "sku", "qty", "unit_price"]);
+    const scope = storeScope(context.user);
+    const txns = await readAll(b, "SalesTransaction", { ...scope, store_id: data.storeId, is_quarantined: { $ne: true } }, ["date", "sku", "qty", "unit_price"]);
     const prods = await readAll(b, "Product", {}, ["sku", "category"]);
     const pmap = new Map(prods.map((p) => [String(p.sku), p.category || "Unknown"]));
     const byCat = new Map();
