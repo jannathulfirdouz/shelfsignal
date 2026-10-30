@@ -14,12 +14,16 @@ export const Route = createFileRoute("/_authed/customers")({
 });
 
 const SEG_COLORS = { Champions: "bg-emerald-50 text-emerald-700", Loyal: "bg-sky-50 text-sky-700", "At risk": "bg-amber-50 text-amber-700", Lost: "bg-rose-50 text-rose-700" };
+const SEGS = ["Champions", "Loyal", "At risk", "Lost"];
 
 function CustomersPage() {
   const data = Route.useLoaderData();
   const { user } = useAuth();
   const role = user?.app_role || user?.data?.app_role || "viewer";
   const showEmail = role === "owner";
+  const comparison = data.comparison || [];
+  const agree = comparison.reduce((a, r) => a + (r[r.segment] || 0), 0);
+  const ruleTotal = comparison.reduce((a, r) => a + r.total, 0);
 
   return (
     <div className="space-y-6">
@@ -83,7 +87,7 @@ function CustomersPage() {
                     <tr>{["k-means segment", ...SEGS, "Total"].map((c) => <th key={c} className="pb-2 pr-4 font-medium">{c}</th>)}</tr>
                   </thead>
                   <tbody>
-                    {data.comparison.map((r) => (
+                    {comparison.map((r) => (
                       <tr key={r.segment} className="border-t border-border">
                         <td className="py-2 pr-4">
                           <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${SEG_COLORS[r.segment] || "bg-muted text-muted-foreground"}`}>{r.segment}</span>
