@@ -33,7 +33,7 @@ function ForecastingPage() {
   const chartData = useMemo(() => {
     const map = new Map();
     for (const a of data.actuals) map.set(a.week_start, { week: a.week_start, actual: a.units });
-    for (const b of data.backtest) { const e = map.get(b.week_start) || { week: b.week_start }; e.backtest = b.predicted; e.actualBT = b.actual; map.set(b.week_start, e); }
+    for (const b of data.backtest) { const e = map.get(b.week_start) || { week: b.week_start }; e.backtest = b.predicted; if (e.actual == null) e.actual = b.actual; map.set(b.week_start, e); }
     for (const f of data.forecast) { const e = map.get(f.week_start) || { week: f.week_start }; e.forecast = f.predicted; e.lower = f.lower; e.upper = f.upper; map.set(f.week_start, e); }
     return [...map.values()].sort((a, b) => (a.week < b.week ? -1 : 1));
   }, [data]);
@@ -78,7 +78,8 @@ function ForecastingPage() {
           <Card>
             <CardHeader>
               <CardTitle>Actuals, backtest and 8-week forecast</CardTitle>
-              <CardDescription>Winner model: {data.winner || "—"}. Band = forecast ± 1.28 × backtest error σ, floored at zero.</CardDescription>
+              <CardDescription>Winner model: {data.winner || "—"}. {data.selectionReason} Band = forecast ± 1.28 × backtest error σ × √(weeks ahead), floored at zero.</CardDescription>
+              {data.risingTrend && <p className="mt-2 inline-block rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">Check: rising trend</p>}
             </CardHeader>
             <CardContent>
               {chartData.length === 0 ? <Empty text="Not enough data (fewer than 16 weeks) for this series." /> : (
@@ -129,6 +130,30 @@ function ForecastingPage() {
         </>
       ) : (
         <Card><CardContent className="p-8"><Empty text="Select a store and series to view its forecast." /></CardContent></Card>
+      )}
+
+      {data.runs?.length > 0 && (
+        <Card>
+          <CardHeader><CardTitle>Recent forecast runs</CardTitle><CardDescription>Latest run is shown above. Average WAPE across the run's series.</CardDescription></CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-left text-muted-foreground"><tr>{["Run", "When", "Series", "Avg WAPE", "By"].map((c) => <th key={c} className="pb-2 pr-4 font-medium">{c}</th>)}</tr></thead>
+                <tbody>
+                  {data.runs.slice(0, 8).map((r) => (
+                    <tr key={r.run_id} className="border-t border-border">
+                      <td className="py-2 pr-4 font-mono text-xs">{r.run_id}</td>
+                      <td className="py-2 pr-4">{r.created_at ? new Date(r.created_at).toLocaleString("en-GB", { timeZone: "UTC" }) : "—"}</td>
+                      <td className="py-2 pr-4">{r.series_count ?? "—"}</td>
+                      <td className="py-2 pr-4">{r.avg_wape != null ? `${(r.avg_wape * 100).toFixed(1)}%` : "—"}</td>
+                      <td className="py-2 pr-4">{r.created_by || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
       )}
     </div>
   );

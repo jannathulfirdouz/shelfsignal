@@ -4,6 +4,7 @@ import { getSegmentData } from "@/lib/ml-fns";
 import { useAuth } from "@/lib/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
 
 export const Route = createFileRoute("/_authed/customers")({
   ssr: false,
@@ -24,6 +25,12 @@ function CustomersPage() {
     <div className="space-y-6">
       <PageHeader title="Customers" subtitle="RFM segmentation. Customers without a reference are excluded." />
 
+      {data.dominantSharePct > 70 && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-800">
+          Warning: {data.dominantSegment} holds {data.dominantSharePct}% of customers. The segmentation is heavily unbalanced — check the RFM inputs.
+        </div>
+      )}
+
       {data.totalCustomers === 0 ? (
         <Card><CardContent className="p-8 text-center text-muted-foreground">No segments yet — run segmentation from the Models page.</CardContent></Card>
       ) : (
@@ -40,6 +47,27 @@ function CustomersPage() {
               </CardContent></Card>
             ))}
           </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Segment sizes and revenue share</CardTitle>
+              <CardDescription>Customer count and share of revenue by segment.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart data={data.summary}>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                  <XAxis dataKey="segment" tick={{ fontSize: 11 }} />
+                  <YAxis yAxisId="left" tick={{ fontSize: 11 }} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
+                  <Tooltip />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="count" name="Customers" fill="hsl(var(--accent))" />
+                  <Bar yAxisId="right" dataKey="revenueShare" name="Revenue share %" fill="hsl(var(--chart-3))" />
+                </BarChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
 
           <Card>
             <CardHeader>

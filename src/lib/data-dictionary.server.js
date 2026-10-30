@@ -177,6 +177,26 @@ export const DICTIONARY_CATALOG = [
   { entity: "Anomaly", field: "actual", definition: "Actual daily net revenue.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
   { entity: "Anomaly", field: "z_score", definition: "Standardised deviation from expected.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
   { entity: "Anomaly", field: "direction", definition: "high or low.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Forecast", field: "flag", definition: "Quality flag on the forecast, e.g. Check: rising trend.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "ForecastRun", field: "avg_wape", definition: "Average backtest WAPE across the run's series.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  // Phase 6: Action centre
+  { entity: "Recommendation", field: "store_id", definition: "Store the recommendation applies to.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Recommendation", field: "type", definition: "reorder, markdown, investigate or re_engage.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Recommendation", field: "sku", definition: "Product the recommendation concerns (reorder, markdown, investigate).", owner: "System", source: "App", source_type: "Derived", sensitivity: "Public" },
+  { entity: "Recommendation", field: "category", definition: "Category the recommendation concerns.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Recommendation", field: "customer_ref", definition: "Customer the re-engage recommendation concerns.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Recommendation", field: "title", definition: "Short recommendation title.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Recommendation", field: "reason", definition: "Plain-English reason built from the metrics.", owner: "System", source: "App", source_type: "Simulated", sensitivity: "Internal" },
+  { entity: "Recommendation", field: "metrics", definition: "JSON of the numbers used to build the recommendation.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Recommendation", field: "confidence", definition: "high, medium or low, from forecast WAPE and trust score.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Recommendation", field: "expected_impact_gbp", definition: "Estimated value affected (GBP), used for ranking.", owner: "System", source: "App", source_type: "Simulated", sensitivity: "Internal" },
+  { entity: "Recommendation", field: "status", definition: "new, accepted or rejected.", owner: "Owner", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Recommendation", field: "decided_by", definition: "User who accepted or rejected the recommendation.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Recommendation", field: "decided_at", definition: "Decision timestamp.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Recommendation", field: "decision_note", definition: "Optional note recorded with the decision.", owner: "Owner", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Recommendation", field: "generated_at", definition: "Generation timestamp.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Recommendation", field: "run_id", definition: "Generation run identifier.", owner: "System", source: "App", source_type: "Derived", sensitivity: "Internal" },
+  { entity: "Recommendation", field: "ai_explanation", definition: "Saved AI explanation, generated only on request.", owner: "System", source: "App", source_type: "Simulated", sensitivity: "Internal" },
 ];
 
 // Create only the (entity, field) pairs not already present. Returns counts.

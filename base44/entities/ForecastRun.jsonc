@@ -14,6 +14,9 @@
     "series_count": {
       "type": "number"
     },
+    "avg_wape": {
+      "type": "number"
+    },
     "notes": {
       "type": "string"
     }

@@ -45,6 +45,9 @@
     },
     "actual_units": {
       "type": "number"
+    },
+    "flag": {
+      "type": "string"
     }
   },
   "required": [

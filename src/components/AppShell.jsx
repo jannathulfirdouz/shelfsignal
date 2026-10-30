@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useRouter } from "@tanstack/react-router";
-import { LayoutDashboard, Upload, ShieldCheck, LogOut, Menu, X, LineChart, BadgeCheck, Home, BarChart3, Boxes, Scale, Lock, Users, TrendingUp, BrainCircuit } from "lucide-react";
+import { LayoutDashboard, Upload, ShieldCheck, LogOut, Menu, X, LineChart, BadgeCheck, Home, BarChart3, Boxes, Scale, Lock, Users, TrendingUp, BrainCircuit, Lightbulb } from "lucide-react";
 import { useAuth } from "@/lib/AuthContext";
 import { RoleSwitcher } from "@/components/RoleSwitcher";
 
@@ -11,6 +11,7 @@ const NAV = [
   { to: "/inventory", label: "Inventory", icon: Boxes },
   { to: "/customers", label: "Customers", icon: Users },
   { to: "/forecasting", label: "Forecasting", icon: TrendingUp },
+  { to: "/actions", label: "Action centre", icon: Lightbulb },
   { to: "/import", label: "Import data", icon: Upload, importerOnly: true },
   { to: "/data-quality", label: "Data quality", icon: BadgeCheck },
   { to: "/models", label: "Models", icon: BrainCircuit, govOnly: true },

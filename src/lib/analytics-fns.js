@@ -188,7 +188,9 @@ export const getHomeData = createServerFn({ method: "GET" })
       returnRate: prev.returnRate,
     } : null;
 
-    return { kpis, prevKpis, weeklyTrend, revenueByStore, trust, filters, maxDate };
+    const topActions = (await b.entities.Recommendation.filter({ ...scope, status: "new" }, { sort: "-expected_impact_gbp", limit: 5 })).items ?? [];
+
+    return { kpis, prevKpis, weeklyTrend, revenueByStore, trust, filters, maxDate, topActions };
   });
 
 // ---- Sales ------------------------------------------------------------------

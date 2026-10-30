@@ -5,11 +5,12 @@ import { useAuth } from "@/lib/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
 import { RunCard } from "@/components/models/RunCard";
 import {
-  getModelsStatus, prepareForecast, runForecastChunk, logModelRun,
+  getModelsStatus, prepareForecast, runForecastChunk, finalizeForecastRun, logModelRun,
   prepareSegmentation, runSegmentation, upsertSegmentChunk,
   prepareAbcXyz, runAbcXyzStore,
   prepareAnomaly, runAnomalyStore,
 } from "@/lib/ml-fns";
+import { prepareRecommendations, generateRecommendations } from "@/lib/recommendations-fns";
 
 export const Route = createFileRoute("/_authed/models")({
   ssr: false,
@@ -56,22 +57,28 @@ function ModelsPage() {
   const aStore = useServerFn(runAbcXyzStore);
   const nPrepare = useServerFn(prepareAnomaly);
   const nStore = useServerFn(runAnomalyStore);
+  const fFinal = useServerFn(finalizeForecastRun);
+  const recPrepare = useServerFn(prepareRecommendations);
+  const recGen = useServerFn(generateRecommendations);
 
   const refresh = () => router.invalidate();
 
   const forecastRun = async (onProgress) => {
     const wait = (w, s) => onProgress({ waiting: w, seconds: s });
     const { series } = await withRetry(() => fPrepare({ data: {} }), wait);
+    const runId = "fc_" + Date.now();
     const slices = Math.ceil(series.length / CHUNK);
-    let writes = 0;
+    let writes = 0, wapeSum = 0, seriesCount = 0;
     for (let i = 0; i < slices; i++) {
       const slice = series.slice(i * CHUNK, (i + 1) * CHUNK);
-      const r = await withRetry(() => fChunk({ data: { series: slice, sliceIndex: i, totalSlices: slices, totalSeries: series.length } }), wait);
+      const r = await withRetry(() => fChunk({ data: { series: slice, sliceIndex: i, totalSlices: slices, totalSeries: series.length, runId } }), wait);
       writes += r.writes || 0;
+      wapeSum += r.wapeSum || 0;
+      seriesCount += r.seriesCount || 0;
       onProgress({ done: i + 1, total: slices, waiting: false });
       if (r.stopped) throw new Error(r.error || "Stopped");
     }
-    await fLog({ data: { action: "run_forecast", entity: "Forecast", detail: `${series.length} series, ${writes} writes` } });
+    await fFinal({ data: { runId, avgWape: seriesCount ? wapeSum / seriesCount : 0, seriesCount, writes } });
     refresh();
     return { writes };
   };
@@ -123,6 +130,15 @@ function ModelsPage() {
     return { writes };
   };
 
+  const recRun = async (onProgress) => {
+    onProgress({ done: 0, total: 1, waiting: false });
+    const r = await withRetry(() => recGen({ data: {} }), (w, s) => onProgress({ waiting: w, seconds: s }));
+    onProgress({ done: 1, total: 1, waiting: false });
+    if (r.stopped) throw new Error(r.error || "Stopped");
+    refresh();
+    return { writes: r.writes };
+  };
+
   return (
     <div className="space-y-6">
       <PageHeader title="Models" subtitle="Run demand forecasts, segmentation, ABC-XYZ and anomaly detection. Owners and analysts only." />
@@ -131,6 +147,7 @@ function ModelsPage() {
         <RunCard title="Customer segmentation" description="RFM k-means (k = 4): Champions, Loyal, At risk, Lost. Reads non-quarantined sales." lastRun={status.segmentation} prepare={() => withRetry(() => sPrepare({ data: {} }))} run={segmentRun} disabled={lock("segmentation")} onBusyChange={busyFor("segmentation")} />
         <RunCard title="ABC-XYZ classification" description="ABC by cumulative revenue share, XYZ by coefficient of variation of weekly units. Per store × SKU." lastRun={status.abcxyz} prepare={() => withRetry(() => aPrepare({ data: {} }))} run={abcRun} disabled={lock("abcxyz")} onBusyChange={busyFor("abcxyz")} />
         <RunCard title="Anomaly detection" description="Daily net revenue per store × category, rolling 28-trading-day stats, |z| > 3 flagged." lastRun={status.anomaly} prepare={() => withRetry(() => nPrepare({ data: {} }))} run={anomalyRun} disabled={lock("anomaly")} onBusyChange={busyFor("anomaly")} />
+        <RunCard title="Action recommendations" description="Reorder, markdown, investigate and re-engage actions from inventory, forecasts and segments. Regenerates only changed items." lastRun={status.recommendations} prepare={() => withRetry(() => recPrepare({ data: {} }))} run={recRun} disabled={lock("recommendations")} onBusyChange={busyFor("recommendations")} />
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { getHomeData, getMetricDefinitions } from "@/lib/analytics-fns";
 import { useAuth } from "@/lib/AuthContext";
@@ -113,7 +113,22 @@ function HomePage() {
       <Card>
         <CardHeader><CardTitle className="flex items-center gap-2"><Lightbulb className="h-5 w-5 text-accent" /> Top 5 actions</CardTitle></CardHeader>
         <CardContent>
-          <p className="text-sm text-muted-foreground">Actionable recommendations will appear here once forecasting and replenishment rules are configured.</p>
+          {data.topActions?.length ? (
+            <div className="space-y-2">
+              {data.topActions.map((a) => (
+                <Link key={a.id} to="/actions" className="flex items-center justify-between gap-3 rounded-lg border border-border p-3 transition-colors hover:bg-muted/50">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{a.title}</p>
+                    <p className="text-[11px] capitalize text-muted-foreground">{String(a.type).replace("_", " ")} · {a.confidence} confidence · {a.store_id}</p>
+                  </div>
+                  <span className="shrink-0 text-sm font-semibold">£{Number(a.expected_impact_gbp || 0).toLocaleString("en-GB")}</span>
+                </Link>
+              ))}
+              <Link to="/actions" className="inline-block pt-1 text-sm font-medium text-accent hover:underline">View all actions →</Link>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No open recommendations yet — generate them from the Models page.</p>
+          )}
         </CardContent>
       </Card>
     </div>

@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth-middleware";
 import { storeScope } from "@/lib/store-scope.server";
-import { forecastSeries, segmentCustomers, abcXyz, detectAnomalies } from "@/lib/ml.server";
+import { forecastSeries, segmentCustomers, abcXyz, detectAnomalies, pickWinner, FORECAST_MODELS } from "@/lib/ml.server";
 
 const roleOf = (u) => u?.app_role || u?.data?.app_role || "viewer";
 const canRun = (u) => ["owner", "analyst"].includes(roleOf(u));
@@ -36,7 +36,7 @@ async function throttle() {
   }
 }
 // Throttle + automatic 429 retry: wait the seconds in the message, up to MAX_RETRIES.
-async function withRate(fn) {
+export async function withRate(fn) {
   for (let attempt = 0; ; attempt++) {
     await throttle();
     try { return await fn(); }
@@ -47,7 +47,7 @@ async function withRate(fn) {
   }
 }
 
-async function readAll(b, name, query, fields) {
+export async function readAll(b, name, query, fields) {
   const rows = []; let cursor;
   do { const p = await withRate(() => b.entities[name].filter(query, { limit: PAGE, cursor, fields })); rows.push(...(p.items ?? [])); cursor = p.has_more ? p.next_cursor : undefined; } while (cursor);
   return rows;
@@ -59,7 +59,7 @@ function addUnits(outer, store, key, week, u) {
   let m = outer.get(sk); if (!m) { m = new Map(); outer.set(sk, m); }
   m.set(week, (m.get(week) || 0) + u);
 }
-async function audit(b, user, { action, entity, record_ref, detail }) {
+export async function audit(b, user, { action, entity, record_ref, detail }) {
   try { await b.entities.AuditLog.create({ user: user.email || user.id, role: roleOf(user), action, entity, record_ref: record_ref || "", timestamp: new Date().toISOString(), detail: detail || "" }); } catch { /* best-effort */ }
 }
 
@@ -95,11 +95,12 @@ export const getModelsStatus = createServerFn({ method: "GET" })
   .middleware([requireUser])
   .handler(async ({ context }) => {
     const b = context.getBase44();
-    const actions = ["run_forecast", "run_segmentation", "run_abcxyz", "run_anomaly"];
+    const actions = ["run_forecast", "run_segmentation", "run_abcxyz", "run_anomaly", "generate_recommendations"];
     const out = {};
     for (const a of actions) {
       const p = await b.entities.AuditLog.filter({ action: a }, { sort: "-timestamp", limit: 1 });
-      out[a.replace("run_", "")] = p.items?.[0]?.timestamp ?? null;
+      const key = a === "generate_recommendations" ? "recommendations" : a.replace("run_", "");
+      out[key] = p.items?.[0]?.timestamp ?? null;
     }
     return out;
   });
@@ -134,14 +135,14 @@ export const prepareForecast = createServerFn({ method: "GET" })
       const top = [...s.skuRev.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20);
       for (const [sku] of top) series.push({ store_id, series_type: "sku", series_key: sku });
     }
-    return { series, estimatedWrites: series.length * 19 + 1 };
+    return { series, estimatedWrites: series.length * 20 + 2 };
   });
 
 export const runForecastChunk = createServerFn({ method: "POST" })
   .middleware([requireUser])
   .validator(z.object({
     series: z.array(z.object({ store_id: z.string(), series_type: z.enum(["category", "sku"]), series_key: z.string() })).max(20),
-    sliceIndex: z.number().int(), totalSlices: z.number().int(), totalSeries: z.number().int(),
+    sliceIndex: z.number().int(), totalSlices: z.number().int(), totalSeries: z.number().int(), runId: z.string().min(1),
   }))
   .handler(async ({ data, context }) => {
     if (!canRun(context.user)) throw forbid();
@@ -150,14 +151,10 @@ export const runForecastChunk = createServerFn({ method: "POST" })
     const scope = storeScope(context.user);
 
     if (data.sliceIndex === 0) {
-      // Clean slate: delete any partial Forecast rows left by a previous run so
-      // the re-run starts clean (no stale duplicates). asServiceRole so analysts
-      // can re-run too (Forecast delete is owner-only under RLS).
-      try { await b.asServiceRole.entities.Forecast.deleteMany({ run_id: FORECAST_RUN }); } catch { /* best-effort */ }
-      const ex = await b.entities.ForecastRun.filter({ run_id: FORECAST_RUN }, { limit: 1 });
-      const now = new Date().toISOString();
-      if (ex.items?.[0]) await b.entities.ForecastRun.update(ex.items[0].id, { created_by: user.email || user.id, created_at: now, series_count: data.totalSeries, notes: "" });
-      else await b.entities.ForecastRun.create({ run_id: FORECAST_RUN, created_by: user.email || user.id, created_at: now, series_count: data.totalSeries, notes: "" });
+      // Keep only the latest run's Forecast rows; history lives in ForecastRun.
+      // asServiceRole so analysts can re-run too (Forecast delete is owner-only).
+      try { await b.asServiceRole.entities.Forecast.deleteMany({}); } catch { /* best-effort */ }
+      await b.entities.ForecastRun.create({ run_id: data.runId, created_by: user.email || user.id, created_at: new Date().toISOString(), series_count: data.totalSeries, notes: "" });
     }
 
     // One large paged read for every series in this chunk instead of one request
@@ -173,16 +170,19 @@ export const runForecastChunk = createServerFn({ method: "POST" })
     }
 
     const outRows = [];
+    let wapeSum = 0, seriesCount = 0;
     for (const s of data.series) {
       const m = (s.series_type === "category" ? catBy : skuBy).get(`${s.store_id}|${s.series_key}`);
       const weeks = m ? [...m.entries()].sort((a, c) => (a[0] < c[0] ? -1 : 1)).map(([week_start, units]) => ({ week_start, units })) : [];
       const res = forecastSeries(weeks);
       if (res.notEnough) continue;
-      for (let i = 0; i < 8; i++) outRows.push({ run_id: FORECAST_RUN, store_id: s.store_id, series_type: s.series_type, series_key: s.series_key, model: res.winner, wape: res.models[res.winner].wape, bias: res.models[res.winner].bias, week_start: res.testWeeks[i], predicted_units: res.backtestPred[i], lower: null, upper: null, is_backtest: true, actual_units: res.testActual[i] });
-      for (let i = 0; i < 8; i++) outRows.push({ run_id: FORECAST_RUN, store_id: s.store_id, series_type: s.series_type, series_key: s.series_key, model: res.winner, wape: res.models[res.winner].wape, bias: res.models[res.winner].bias, week_start: res.forecastWeeks[i], predicted_units: res.forecast[i], lower: res.lower[i], upper: res.upper[i], is_backtest: false, actual_units: null });
-      for (const mdl of ["naive", "ma", "ses", "holt"]) {
+      wapeSum += res.models[res.winner].wape; seriesCount++;
+      const flag = res.risingTrend ? "Check: rising trend" : "";
+      for (let i = 0; i < 8; i++) outRows.push({ run_id: data.runId, store_id: s.store_id, series_type: s.series_type, series_key: s.series_key, model: res.winner, wape: res.models[res.winner].wape, bias: res.models[res.winner].bias, week_start: res.testWeeks[i], predicted_units: res.backtestPred[i], lower: null, upper: null, is_backtest: true, actual_units: res.testActual[i], flag: "" });
+      for (let i = 0; i < 8; i++) outRows.push({ run_id: data.runId, store_id: s.store_id, series_type: s.series_type, series_key: s.series_key, model: res.winner, wape: res.models[res.winner].wape, bias: res.models[res.winner].bias, week_start: res.forecastWeeks[i], predicted_units: res.forecast[i], lower: res.lower[i], upper: res.upper[i], is_backtest: false, actual_units: null, flag });
+      for (const mdl of FORECAST_MODELS) {
         if (mdl === res.winner) continue;
-        outRows.push({ run_id: FORECAST_RUN, store_id: s.store_id, series_type: s.series_type, series_key: s.series_key, model: mdl, wape: res.models[mdl].wape, bias: res.models[mdl].bias, week_start: res.forecastWeeks[0], predicted_units: res.models[mdl].forecast[0], lower: null, upper: null, is_backtest: false, actual_units: null });
+        outRows.push({ run_id: data.runId, store_id: s.store_id, series_type: s.series_type, series_key: s.series_key, model: mdl, wape: res.models[mdl].wape, bias: res.models[mdl].bias, week_start: res.forecastWeeks[0], predicted_units: res.models[mdl].forecast[0], lower: null, upper: null, is_backtest: false, actual_units: null, flag: "" });
       }
     }
 
@@ -191,10 +191,23 @@ export const runForecastChunk = createServerFn({ method: "POST" })
     let writes = 0; let stopped = false; let error = null;
     if (outRows.length) {
       const keyFn = (x) => `${x.store_id}|${x.series_type}|${x.series_key}|${x.model}|${x.week_start}|${x.is_backtest}`;
-      const r = await diffUpsert(b, "Forecast", outRows, keyFn, ["predicted_units", "lower", "upper", "wape", "bias", "actual_units"], []);
+      const r = await diffUpsert(b, "Forecast", outRows, keyFn, ["predicted_units", "lower", "upper", "wape", "bias", "actual_units", "flag"], []);
       writes = r.writes; stopped = r.stopped; error = r.error;
     }
-    return { sliceIndex: data.sliceIndex, writes, stopped, error };
+    return { sliceIndex: data.sliceIndex, writes, stopped, error, wapeSum, seriesCount };
+  });
+
+export const finalizeForecastRun = createServerFn({ method: "POST" })
+  .middleware([requireUser])
+  .validator(z.object({ runId: z.string().min(1), avgWape: z.number(), seriesCount: z.number().int().nonnegative(), writes: z.number().int().nonnegative() }))
+  .handler(async ({ data, context }) => {
+    if (!canRun(context.user)) throw forbid();
+    const b = context.getBase44();
+    const p = await b.entities.ForecastRun.filter({ run_id: data.runId }, { limit: 1 });
+    const rec = p.items?.[0];
+    if (rec) await b.entities.ForecastRun.update(rec.id, { avg_wape: data.avgWape, series_count: data.seriesCount });
+    await audit(b, context.user, { action: "run_forecast", entity: "Forecast", record_ref: data.runId, detail: `${data.seriesCount} series, ${data.writes} writes, avg WAPE ${(data.avgWape * 100).toFixed(1)}%` });
+    return { ok: true };
   });
 
 export const getForecastData = createServerFn({ method: "GET" })
@@ -205,7 +218,13 @@ export const getForecastData = createServerFn({ method: "GET" })
     const scope = storeScope(context.user);
     const sumRows = await readAll(b, "SalesWeeklySummary", scope, ["store_id", "week_start", "category", "sku", "units", "net_revenue"]);
     const stores = [...new Set(sumRows.map((r) => r.store_id))].sort();
-    if (!data.storeId) return { stores, series: [], actuals: [], backtest: [], forecast: [], comparison: [], winner: null };
+
+    // Latest run + history (most recent first).
+    const runPage = await b.entities.ForecastRun.filter({}, { sort: "-created_at", limit: 12 });
+    const runs = (runPage.items ?? []).map((r) => ({ run_id: r.run_id, created_at: r.created_at, created_by: r.created_by, series_count: r.series_count ?? null, avg_wape: r.avg_wape ?? null }));
+    const runId = runs[0]?.run_id ?? null;
+    const empty = { stores, series: [], actuals: [], backtest: [], forecast: [], comparison: [], winner: null, selectionReason: "", risingTrend: false, runs, runId };
+    if (!data.storeId) return empty;
 
     const storeRows = sumRows.filter((r) => r.store_id === data.storeId);
     const cats = new Set(); const skuRev = new Map();
@@ -214,9 +233,9 @@ export const getForecastData = createServerFn({ method: "GET" })
       ...[...cats].sort().map((c) => ({ series_type: "category", series_key: c, label: c })),
       ...[...skuRev.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20).map(([sku]) => ({ series_type: "sku", series_key: sku, label: sku })),
     ];
-    // Latest-run forecasts for this store tell us which series actually have data;
-    // the rest (fewer than 16 complete weeks) are listed but flagged "not enough data".
-    const fkRows = await readAll(b, "Forecast", { ...scope, run_id: FORECAST_RUN, store_id: data.storeId }, ["series_type", "series_key"]);
+    // Latest-run forecasts for this store tell us which series have data; the rest
+    // (fewer than 16 complete weeks) are listed but flagged "not enough data".
+    const fkRows = runId ? await readAll(b, "Forecast", { ...scope, run_id: runId, store_id: data.storeId }, ["series_type", "series_key"]) : [];
     const haveForecast = new Set(fkRows.map((r) => `${r.series_type}|${r.series_key}`));
     const seen = new Set(series.map((s) => `${s.series_type}|${s.series_key}`));
     for (const r of fkRows) {
@@ -224,24 +243,28 @@ export const getForecastData = createServerFn({ method: "GET" })
       if (!seen.has(k)) { seen.add(k); series.push({ series_type: r.series_type, series_key: r.series_key, label: r.series_key }); }
     }
     for (const s of series) s.notEnough = !haveForecast.has(`${s.series_type}|${s.series_key}`);
-    if (!data.seriesKey) return { stores, series, actuals: [], backtest: [], forecast: [], comparison: [], winner: null };
+    if (!data.seriesKey) return { ...empty, series };
 
-    // actuals
-    const actuals = storeRows.filter((r) => (data.seriesType === "category" ? r.category === data.seriesKey : r.sku === data.seriesKey))
-      .map((r) => ({ week_start: r.week_start, units: Math.round(Number(r.units) || 0) }))
-      .sort((a, b) => (a.week_start < b.week_start ? -1 : 1));
+    // Actual weekly units for every history week, summed per week (a category spans
+    // several SKU rows per week). Includes the backtest weeks for comparison.
+    const actMap = new Map();
+    for (const r of storeRows) {
+      const match = data.seriesType === "category" ? r.category === data.seriesKey : r.sku === data.seriesKey;
+      if (!match) continue;
+      actMap.set(r.week_start, (actMap.get(r.week_start) || 0) + (Number(r.units) || 0));
+    }
+    const actuals = [...actMap.entries()].map(([week_start, units]) => ({ week_start, units: Math.round(units) })).sort((a, b) => (a.week_start < b.week_start ? -1 : 1));
 
-    const fRows = await readAll(b, "Forecast", { ...scope, run_id: FORECAST_RUN, store_id: data.storeId, series_type: data.seriesType, series_key: data.seriesKey }, ["model", "week_start", "is_backtest", "predicted_units", "lower", "upper", "wape", "bias", "actual_units"]);
+    const fRows = runId ? await readAll(b, "Forecast", { ...scope, run_id: runId, store_id: data.storeId, series_type: data.seriesType, series_key: data.seriesKey }, ["model", "week_start", "is_backtest", "predicted_units", "lower", "upper", "wape", "bias", "actual_units", "flag"]) : [];
     const backtest = fRows.filter((r) => r.is_backtest).map((r) => ({ week_start: r.week_start, predicted: r.predicted_units, actual: r.actual_units })).sort((a, b) => (a.week_start < b.week_start ? -1 : 1));
     const winnerRows = fRows.filter((r) => !r.is_backtest);
     const forecast = winnerRows.filter((r) => r.lower != null || r.upper != null).map((r) => ({ week_start: r.week_start, predicted: r.predicted_units, lower: r.lower, upper: r.upper })).sort((a, b) => (a.week_start < b.week_start ? -1 : 1));
-    // comparison: per model wape/bias from any forecast row
     const byModel = new Map();
     for (const r of fRows) if (!byModel.has(r.model)) byModel.set(r.model, { model: r.model, wape: r.wape, bias: r.bias });
-    let winner = null, minW = Infinity;
-    for (const m of byModel.values()) if (m.wape != null && m.wape < minW) { minW = m.wape; winner = m.model; }
+    const { winner, reason } = pickWinner(Object.fromEntries(byModel));
     const comparison = [...byModel.values()].map((m) => ({ ...m, isWinner: m.model === winner }));
-    return { stores, series, actuals, backtest, forecast, comparison, winner };
+    const risingTrend = fRows.some((r) => r.flag === "Check: rising trend");
+    return { stores, series, actuals, backtest, forecast, comparison, winner, selectionReason: reason, risingTrend, runs, runId };
   });
 
 // ============ 2. Customer segmentation ============
@@ -251,7 +274,7 @@ export const prepareSegmentation = createServerFn({ method: "GET" })
     if (!canRun(context.user)) throw forbid();
     const b = context.getBase44();
     const scope = storeScope(context.user);
-    const a = await b.entities.SalesTransaction.aggregate({ query: { ...scope, is_quarantined: { $ne: true }, customer_ref: { $exists: true, $ne: "" } }, countDistinct: "customer_ref" });
+    const a = await b.entities.SalesTransaction.aggregate({ query: { ...scope, is_quarantined: { $ne: true }, customer_ref: { $exists: true, $nin: ["", "null", "NULL", "Null"] } }, countDistinct: "customer_ref" });
     const count = Number(a.rows?.[0]?.count_distinct_customer_ref || 0);
     return { count, estimatedWrites: count + 1 };
   });
@@ -262,13 +285,16 @@ export const runSegmentation = createServerFn({ method: "POST" })
     if (!canRun(context.user)) throw forbid();
     const b = context.getBase44();
     const scope = storeScope(context.user);
+    // Drop any stale segment rows with a blank or "null" customer reference.
+    try { await b.asServiceRole.entities.CustomerSegment.deleteMany({ customer_ref: { $in: ["null", "NULL", "Null", ""] } }); } catch { /* best-effort */ }
     const txns = await readAll(b, "SalesTransaction", { ...scope, is_quarantined: { $ne: true }, customer_ref: { $exists: true, $ne: "" } }, ["customer_ref", "invoice_no", "date", "sku", "qty", "unit_price"]);
     const customers = await readAll(b, "Customer", {}, ["customer_ref", "country"]);
     const countryMap = new Map(customers.map((c) => [String(c.customer_ref), c.country]));
     const REF_DATE = new Date("2011-12-09T00:00:00Z");
     const byCust = new Map();
     for (const t of txns) {
-      const ref = String(t.customer_ref);
+      const ref = String(t.customer_ref ?? "").trim();
+      if (!ref || ref.toLowerCase() === "null") continue;
       let c = byCust.get(ref);
       if (!c) { c = { invoices: new Set(), last: "", monetary: 0 }; byCust.set(ref, c); }
       c.invoices.add(t.invoice_no);
@@ -312,11 +338,14 @@ export const getSegmentData = createServerFn({ method: "GET" })
     for (const r of segRows) { (groups[r.segment] ??= { count: 0, monetary: 0, recency: 0, frequency: 0 }); const g = groups[r.segment]; g.count++; g.monetary += r.monetary; g.recency += r.recency_days; g.frequency += r.frequency; }
     const totalRev = Object.values(groups).reduce((a, g) => a + g.monetary, 0) || 1;
     const summary = Object.entries(groups).map(([segment, g]) => ({ segment, count: g.count, revenueShare: r2((g.monetary / totalRev) * 100), avgRecency: Math.round(g.recency / g.count), avgFrequency: r2(g.frequency / g.count), avgMonetary: r2(g.monetary / g.count), revenue: r2(g.monetary) }));
+    const totalSeg = segRows.length || 1;
+    const dominant = summary.reduce((a, s) => (s.count > (a ? a.count : 0) ? s : a), null);
+    const dominantSharePct = dominant ? r2((dominant.count / totalSeg) * 100) : 0;
     const atRisk = (groups["At risk"]?.monetary || 0);
     let list = segRows.map((r) => ({ customer_ref: r.customer_ref, store_id: r.store_id, segment: r.segment, recency: r.recency_days, frequency: r.frequency, monetary: r.monetary, email: emailMap.get(r.customer_ref) || null }));
     if (data.segment) list = list.filter((r) => r.segment === data.segment);
     list.sort((a, b) => b.monetary - a.monetary);
-    return { summary, atRiskRevenue: r2(atRisk), totalCustomers: segRows.length, customers: list.slice(0, 500) };
+    return { summary, atRiskRevenue: r2(atRisk), totalCustomers: segRows.length, dominantSegment: dominant?.segment ?? null, dominantSharePct, customers: list.slice(0, 500) };
   });
 
 // ============ 3. ABC-XYZ ============
