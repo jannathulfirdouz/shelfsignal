@@ -83,19 +83,19 @@ function ModelsPage() {
     return { writes };
   };
 
-  const segmentRun = async (onProgress) => {
+  const segmentRun = async (onProgress, force = false) => {
     const wait = (w, s) => onProgress({ waiting: w, seconds: s });
     const { segments } = await withRetry(() => sRun({ data: {} }), wait);
     const chunks = Math.ceil(segments.length / 500);
     let writes = 0;
     for (let i = 0; i < chunks; i++) {
       const rows = segments.slice(i * 500, (i + 1) * 500);
-      const r = await withRetry(() => sUpsert({ data: { rows } }), wait);
+      const r = await withRetry(() => sUpsert({ data: { rows, force } }), wait);
       writes += r.writes || 0;
       onProgress({ done: i + 1, total: chunks, waiting: false });
       if (r.stopped) throw new Error(r.error || "Stopped");
     }
-    await fLog({ data: { action: "run_segmentation", entity: "CustomerSegment", detail: `${segments.length} customers, ${writes} writes` } });
+    await fLog({ data: { action: "run_segmentation", entity: "CustomerSegment", detail: `${segments.length} customers, ${writes} writes${force ? " (force rewrite)" : ""}` } });
     refresh();
     return { writes };
   };
@@ -144,7 +144,7 @@ function ModelsPage() {
       <PageHeader title="Models" subtitle="Run demand forecasts, segmentation, ABC-XYZ and anomaly detection. Owners and analysts only." />
       <div className="grid gap-6 lg:grid-cols-2">
         <RunCard title="Demand forecasting" description="Naive, 4-week MA, exponential smoothing and Holt's trend per store × category and top-20 SKUs. 8-week forecast with 80% band." lastRun={status.forecast} prepare={() => withRetry(() => fPrepare({ data: {} }))} run={forecastRun} disabled={lock("forecast")} onBusyChange={busyFor("forecast")} />
-        <RunCard title="Customer segmentation" description="RFM k-means (k = 4): Champions, Loyal, At risk, Lost. Reads non-quarantined sales." lastRun={status.segmentation} prepare={() => withRetry(() => sPrepare({ data: {} }))} run={segmentRun} disabled={lock("segmentation")} onBusyChange={busyFor("segmentation")} />
+        <RunCard title="Customer segmentation" description="RFM k-means (k = 4): Champions, Loyal, At risk, Lost. Reads non-quarantined sales." lastRun={status.segmentation} prepare={() => withRetry(() => sPrepare({ data: {} }))} run={(p) => segmentRun(p, false)} forceRun={(p) => segmentRun(p, true)} disabled={lock("segmentation")} onBusyChange={busyFor("segmentation")} />
         <RunCard title="ABC-XYZ classification" description="ABC by cumulative revenue share, XYZ by coefficient of variation of weekly units. Per store × SKU." lastRun={status.abcxyz} prepare={() => withRetry(() => aPrepare({ data: {} }))} run={abcRun} disabled={lock("abcxyz")} onBusyChange={busyFor("abcxyz")} />
         <RunCard title="Anomaly detection" description="Daily net revenue per store × category, rolling 28-trading-day stats, |z| > 3 flagged." lastRun={status.anomaly} prepare={() => withRetry(() => nPrepare({ data: {} }))} run={anomalyRun} disabled={lock("anomaly")} onBusyChange={busyFor("anomaly")} />
         <RunCard title="Action recommendations" description="Reorder, markdown, investigate and re-engage actions from inventory, forecasts and segments. Regenerates only changed items." lastRun={status.recommendations} prepare={() => withRetry(() => recPrepare({ data: {} }))} run={recRun} disabled={lock("recommendations")} onBusyChange={busyFor("recommendations")} />

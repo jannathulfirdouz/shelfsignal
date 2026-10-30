@@ -71,6 +71,41 @@ function CustomersPage() {
 
           <Card>
             <CardHeader>
+              <CardTitle>k-means segments vs RFM quintile scores</CardTitle>
+              <CardDescription>
+                Rows are the k-means labels; columns are the rule-based group from plain RFM scores (recency, frequency and monetary each scored 1–5, 5 = best). The bold diagonal is where both methods agree.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="text-left text-muted-foreground">
+                    <tr>{["k-means segment", ...SEGS, "Total"].map((c) => <th key={c} className="pb-2 pr-4 font-medium">{c}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {data.comparison.map((r) => (
+                      <tr key={r.segment} className="border-t border-border">
+                        <td className="py-2 pr-4">
+                          <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${SEG_COLORS[r.segment] || "bg-muted text-muted-foreground"}`}>{r.segment}</span>
+                        </td>
+                        {SEGS.map((s) => (
+                          <td key={s} className={`py-2 pr-4 ${s === r.segment ? "font-semibold" : "text-muted-foreground"}`}>{r[s].toLocaleString("en-GB")}</td>
+                        ))}
+                        <td className="py-2 pr-4 font-medium">{r.total.toLocaleString("en-GB")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-3 text-xs text-muted-foreground">
+                {agree.toLocaleString("en-GB")} of {ruleTotal.toLocaleString("en-GB")} customers get the same label from both methods
+                {ruleTotal ? ` (${((agree / ruleTotal) * 100).toFixed(1)}%)` : ""}.
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
               <CardTitle>At-risk revenue</CardTitle>
               <CardDescription>Revenue tied to "At risk" customers — worth re-engaging.</CardDescription>
             </CardHeader>

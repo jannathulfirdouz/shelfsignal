@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth-middleware";
 import { storeScope } from "@/lib/store-scope.server";
-import { forecastSeries, segmentCustomers, abcXyz, detectAnomalies, pickWinner, FORECAST_MODELS } from "@/lib/ml.server";
+import { forecastSeries, segmentCustomers, abcXyz, detectAnomalies, pickWinner, FORECAST_MODELS, rfmRuleSegments } from "@/lib/ml.server";
 
 const roleOf = (u) => u?.app_role || u?.data?.app_role || "viewer";
 const canRun = (u) => ["owner", "analyst"].includes(roleOf(u));
@@ -67,7 +67,7 @@ export async function audit(b, user, { action, entity, record_ref, detail }) {
 // incoming rows by key (last wins) so a batch never contains the same record
 // twice, strips any accidental id from creates, and dedupes updates by id (last
 // wins) so no two records in a bulkUpdate share an id. Returns writes.
-async function diffUpsert(b, entityName, rows, keyFn, valFields, existingRows) {
+async function diffUpsert(b, entityName, rows, keyFn, valFields, existingRows, force = false) {
   const exMap = new Map(existingRows.map((x) => [keyFn(x), x]));
   const dedup = new Map();
   for (const row of rows) dedup.set(keyFn(row), row); // last wins
@@ -78,7 +78,7 @@ async function diffUpsert(b, entityName, rows, keyFn, valFields, existingRows) {
     else {
       let diff = false;
       for (const f of valFields) if (ex[f] !== row[f]) { diff = true; break; }
-      if (diff) toUpdateMap.set(ex.id, { id: ex.id, ...row }); // dedupe by id, last wins
+      if (diff || force) toUpdateMap.set(ex.id, { id: ex.id, ...row }); // dedupe by id, last wins
     }
   }
   const toUpdate = [...toUpdateMap.values()];
@@ -313,14 +313,15 @@ export const runSegmentation = createServerFn({ method: "POST" })
 
 export const upsertSegmentChunk = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .validator(z.object({ rows: z.array(z.object({ customer_ref: z.string(), store_id: z.string(), recency_days: z.number(), frequency: z.number(), monetary: z.number(), segment: z.string() })).max(500) }))
+  .validator(z.object({ rows: z.array(z.object({ customer_ref: z.string(), store_id: z.string(), recency_days: z.number(), frequency: z.number(), monetary: z.number(), segment: z.string() })).max(500), force: z.boolean().optional() }))
   .handler(async ({ data, context }) => {
     if (!canRun(context.user)) throw forbid();
     const b = context.getBase44();
     const refs = data.rows.map((r) => r.customer_ref);
     const existing = await readAll(b, "CustomerSegment", { customer_ref: { $in: refs } }, ["id", "customer_ref", "store_id", "recency_days", "frequency", "monetary", "segment"]);
     const keyFn = (x) => String(x.customer_ref);
-    const r = await diffUpsert(b, "CustomerSegment", data.rows, keyFn, ["store_id", "recency_days", "frequency", "monetary", "segment"], existing);
+    // Compares segment plus every RFM field; `force` rewrites all of them regardless.
+    const r = await diffUpsert(b, "CustomerSegment", data.rows, keyFn, ["store_id", "recency_days", "frequency", "monetary", "segment"], existing, !!data.force);
     return { writes: r.writes, stopped: r.stopped, error: r.error };
   });
 
@@ -345,7 +346,24 @@ export const getSegmentData = createServerFn({ method: "GET" })
     let list = segRows.map((r) => ({ customer_ref: r.customer_ref, store_id: r.store_id, segment: r.segment, recency: r.recency_days, frequency: r.frequency, monetary: r.monetary, email: emailMap.get(r.customer_ref) || null }));
     if (data.segment) list = list.filter((r) => r.segment === data.segment);
     list.sort((a, b) => b.monetary - a.monetary);
-    return { summary, atRiskRevenue: r2(atRisk), totalCustomers: segRows.length, dominantSegment: dominant?.segment ?? null, dominantSharePct, customers: list.slice(0, 500) };
+
+    // Rule-based cross-check: how each k-means segment is classified by plain RFM
+    // quintile scores (1-5 per dimension, deterministic labels).
+    const SEGS = ["Champions", "Loyal", "At risk", "Lost"];
+    const rule = rfmRuleSegments(segRows.map((r) => ({ recency: r.recency_days, frequency: r.frequency, monetary: r.monetary })));
+    const comparison = SEGS.map((s) => {
+      const row = { segment: s, total: 0 };
+      for (const t of SEGS) row[t] = 0;
+      return row;
+    });
+    const bySeg = new Map(comparison.map((c) => [c.segment, c]));
+    segRows.forEach((r, i) => {
+      const c = bySeg.get(r.segment) || bySeg.get("At risk");
+      c.total++;
+      c[rule[i].rule_segment]++;
+    });
+
+    return { summary, comparison, atRiskRevenue: r2(atRisk), totalCustomers: segRows.length, dominantSegment: dominant?.segment ?? null, dominantSharePct, customers: list.slice(0, 500) };
   });
 
 // ============ 3. ABC-XYZ ============

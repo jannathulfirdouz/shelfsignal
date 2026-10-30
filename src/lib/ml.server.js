@@ -119,9 +119,12 @@ function mulberry32(seed) {
   return function () { let t = (seed += 0x6d2b79f5); t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 }
 function standardize(arr) {
-  const mean = arr.reduce((a, c) => a + c, 0) / (arr.length || 1);
-  const sd = Math.sqrt(arr.reduce((a, c) => a + (c - mean) ** 2, 0) / (arr.length || 1)) || 1;
-  return arr.map((v) => (v - mean) / sd);
+  // A single non-finite input would turn every distance into NaN and silently put
+  // every point in one cluster, so scrub it first.
+  const safe = arr.map((v) => (Number.isFinite(v) ? v : 0));
+  const mean = safe.reduce((a, c) => a + c, 0) / (safe.length || 1);
+  const sd = Math.sqrt(safe.reduce((a, c) => a + (c - mean) ** 2, 0) / (safe.length || 1)) || 1;
+  return safe.map((v) => (v - mean) / sd);
 }
 function percentile(arr, p) {
   if (!arr.length) return 0;
@@ -173,8 +176,11 @@ export function segmentCustomers(rfm) {
   const fCap = percentile(rfm.map((x) => x.frequency), 0.99);
   const mCap = percentile(rfm.map((x) => x.monetary), 0.99);
   const rec = rfm.map((x) => x.recency);
-  const logF = rfm.map((x) => Math.log1p(Math.min(x.frequency, fCap)));
-  const logM = rfm.map((x) => Math.log1p(Math.min(x.monetary, mCap)));
+  // Monetary can be negative when returns exceed purchases; Math.log1p of a value
+  // below -1 is NaN, which collapsed every customer into cluster 0 (all Champions).
+  // Floor at zero before the log.
+  const logF = rfm.map((x) => Math.log1p(Math.max(0, Math.min(x.frequency, fCap))));
+  const logM = rfm.map((x) => Math.log1p(Math.max(0, Math.min(x.monetary, mCap))));
   const rZ = standardize(rec), fZ = standardize(logF), mZ = standardize(logM);
   const data = rfm.map((_, i) => [rZ[i], fZ[i], mZ[i]]);
   const best = kmeans(data, 4, mulberry32(42));
@@ -198,6 +204,33 @@ export function segmentCustomers(rfm) {
     monetary: r2(x.monetary),
     segment: labelMap[best.assign[i]] || "Lost",
   }));
+}
+
+// Rule-based RFM check alongside k-means: recency, frequency and monetary each get a
+// quintile score 1-5 (5 = best: most recent, most orders, highest spend), then a
+// deterministic label. Used only to compare against the k-means segments.
+// rows: [{ recency, frequency, monetary }]
+export function rfmRuleSegments(rows) {
+  if (!rows.length) return [];
+  const cuts = (vals) => {
+    const s = [...vals].sort((a, b) => a - b);
+    return [0.2, 0.4, 0.6, 0.8].map((p) => s[Math.min(s.length - 1, Math.max(0, Math.ceil(p * s.length) - 1))]);
+  };
+  const rCuts = cuts(rows.map((r) => Number(r.recency) || 0));
+  const fCuts = cuts(rows.map((r) => Number(r.frequency) || 0));
+  const mCuts = cuts(rows.map((r) => Number(r.monetary) || 0));
+  const above = (c, v) => c.filter((x) => v >= x).length; // 0-4
+  return rows.map((r) => {
+    const recency_score = 5 - above(rCuts, Number(r.recency) || 0); // recent = high score
+    const frequency_score = 1 + above(fCuts, Number(r.frequency) || 0);
+    const monetary_score = 1 + above(mCuts, Number(r.monetary) || 0);
+    let rule_segment;
+    if (recency_score >= 4 && frequency_score >= 4 && monetary_score >= 4) rule_segment = "Champions";
+    else if (recency_score + frequency_score + monetary_score >= 11) rule_segment = "Loyal";
+    else if (recency_score <= 2 && frequency_score <= 2 && monetary_score <= 2) rule_segment = "Lost";
+    else rule_segment = "At risk";
+    return { recency_score, frequency_score, monetary_score, rule_segment };
+  });
 }
 
 function storeFromCountry(country) {
