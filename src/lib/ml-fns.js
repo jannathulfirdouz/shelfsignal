@@ -7,16 +7,57 @@ import { forecastSeries, segmentCustomers, abcXyz, detectAnomalies } from "@/lib
 const roleOf = (u) => u?.app_role || u?.data?.app_role || "viewer";
 const canRun = (u) => ["owner", "analyst"].includes(roleOf(u));
 const forbid = () => Object.assign(new Error("Only owners and analysts can run models"), { status: 403 });
-const isLimit = (e) => e?.status === 429 || /daily entity write limit/i.test(e?.data?.message || e?.message || "");
 const limitMsg = "Stopped: the app's daily limit of 100,000 record writes was reached. Run again later to continue.";
 const r2 = (n) => Math.round((n || 0) * 100) / 100;
 const FORECAST_RUN = "forecast";
 const PARTIAL_WEEK = "2011-12-05";
 
+// Base44 caps list pages at 5000, so large pages mean far fewer requests.
+const PAGE = 5000;
+// Stay under the 140 req/60s list limit (with headroom) within one invocation.
+const REQ_BUDGET = 110;
+const RATE_WINDOW_MS = 60000;
+const MAX_RETRIES = 5;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const msgOf = (e) => e?.data?.message || e?.message || "";
+const isDailyLimit = (e) => /daily entity write limit/i.test(msgOf(e));
+const isRateLimit = (e) => !isDailyLimit(e) && (e?.status === 429 || /rate limit|too many requests|retry after/i.test(msgOf(e)));
+function retryAfterMs(e) { const m = /retry after (\d+)\s*s/i.exec(msgOf(e)); return m ? Number(m[1]) * 1000 : 10000; }
+
+// Sliding-window throttle so one invocation stays under the request budget.
+const _reqTimes = [];
+async function throttle() {
+  for (;;) {
+    const now = Date.now();
+    while (_reqTimes.length && now - _reqTimes[0] >= RATE_WINDOW_MS) _reqTimes.shift();
+    if (_reqTimes.length < REQ_BUDGET) { _reqTimes.push(now); return; }
+    await sleep(RATE_WINDOW_MS - (now - _reqTimes[0]) + 50);
+  }
+}
+// Throttle + automatic 429 retry: wait the seconds in the message, up to MAX_RETRIES.
+async function withRate(fn) {
+  for (let attempt = 0; ; attempt++) {
+    await throttle();
+    try { return await fn(); }
+    catch (e) {
+      if (!isRateLimit(e) || attempt >= MAX_RETRIES) throw e;
+      await sleep(retryAfterMs(e));
+    }
+  }
+}
+
 async function readAll(b, name, query, fields) {
   const rows = []; let cursor;
-  do { const p = await b.entities[name].filter(query, { limit: 1000, cursor, fields }); rows.push(...(p.items ?? [])); cursor = p.has_more ? p.next_cursor : undefined; } while (cursor);
+  do { const p = await withRate(() => b.entities[name].filter(query, { limit: PAGE, cursor, fields })); rows.push(...(p.items ?? [])); cursor = p.has_more ? p.next_cursor : undefined; } while (cursor);
   return rows;
+}
+
+// Adds units into a store|key -> Map(week -> units) bucket.
+function addUnits(outer, store, key, week, u) {
+  const sk = `${store}|${key}`;
+  let m = outer.get(sk); if (!m) { m = new Map(); outer.set(sk, m); }
+  m.set(week, (m.get(week) || 0) + u);
 }
 async function audit(b, user, { action, entity, record_ref, detail }) {
   try { await b.entities.AuditLog.create({ user: user.email || user.id, role: roleOf(user), action, entity, record_ref: record_ref || "", timestamp: new Date().toISOString(), detail: detail || "" }); } catch { /* best-effort */ }
@@ -43,9 +84,9 @@ async function diffUpsert(b, entityName, rows, keyFn, valFields, existingRows) {
   const toUpdate = [...toUpdateMap.values()];
   let writes = 0; let stopped = false; let error = null;
   try {
-    if (toCreate.length) { for (let i = 0; i < toCreate.length; i += 500) { const s = toCreate.slice(i, i + 500); await b.entities[entityName].bulkCreate(s); writes += s.length; } }
-    if (toUpdate.length) { for (let i = 0; i < toUpdate.length; i += 500) { const s = toUpdate.slice(i, i + 500); await b.entities[entityName].bulkUpdate(s); writes += s.length; } }
-  } catch (e) { if (isLimit(e)) { stopped = true; error = limitMsg; } else throw e; }
+    if (toCreate.length) { for (let i = 0; i < toCreate.length; i += 500) { const s = toCreate.slice(i, i + 500); await withRate(() => b.entities[entityName].bulkCreate(s)); writes += s.length; } }
+    if (toUpdate.length) { for (let i = 0; i < toUpdate.length; i += 500) { const s = toUpdate.slice(i, i + 500); await withRate(() => b.entities[entityName].bulkUpdate(s)); writes += s.length; } }
+  } catch (e) { if (isDailyLimit(e)) { stopped = true; error = limitMsg; } else throw e; }
   return { writes, stopped, error };
 }
 
@@ -106,6 +147,7 @@ export const runForecastChunk = createServerFn({ method: "POST" })
     if (!canRun(context.user)) throw forbid();
     const b = context.getBase44();
     const user = context.user;
+    const scope = storeScope(context.user);
 
     if (data.sliceIndex === 0) {
       // Clean slate: delete any partial Forecast rows left by a previous run so
@@ -118,29 +160,39 @@ export const runForecastChunk = createServerFn({ method: "POST" })
       else await b.entities.ForecastRun.create({ run_id: FORECAST_RUN, created_by: user.email || user.id, created_at: now, series_count: data.totalSeries, notes: "" });
     }
 
-    let writes = 0; let stopped = false; let error = null;
+    // One large paged read for every series in this chunk instead of one request
+    // per series. Weekly units are summed per store×category and store×sku.
+    const orCond = data.series.map((s) => (s.series_type === "category" ? { store_id: s.store_id, category: s.series_key } : { store_id: s.store_id, sku: s.series_key }));
+    const rows = await readAll(b, "SalesWeeklySummary", { ...scope, $or: orCond }, ["store_id", "sku", "category", "week_start", "units"]);
+    const catBy = new Map(); const skuBy = new Map();
+    for (const r of rows) {
+      if (r.week_start >= PARTIAL_WEEK) continue;
+      const u = Number(r.units) || 0;
+      if (r.category) addUnits(catBy, r.store_id, r.category, r.week_start, u);
+      if (r.sku) addUnits(skuBy, r.store_id, r.sku, r.week_start, u);
+    }
+
+    const outRows = [];
     for (const s of data.series) {
-      const q = { store_id: s.store_id };
-      if (s.series_type === "category") q.category = s.series_key; else q.sku = s.series_key;
-      const rows = await readAll(b, "SalesWeeklySummary", q, ["week_start", "units"]);
-      const weeks = rows.filter((r) => r.week_start < PARTIAL_WEEK).map((r) => ({ week_start: r.week_start, units: Number(r.units) || 0 })).sort((a, c) => (a.week_start < c.week_start ? -1 : 1));
+      const m = (s.series_type === "category" ? catBy : skuBy).get(`${s.store_id}|${s.series_key}`);
+      const weeks = m ? [...m.entries()].sort((a, c) => (a[0] < c[0] ? -1 : 1)).map(([week_start, units]) => ({ week_start, units })) : [];
       const res = forecastSeries(weeks);
-      const outRows = [];
-      if (!res.notEnough) {
-        for (let i = 0; i < 8; i++) outRows.push({ run_id: FORECAST_RUN, store_id: s.store_id, series_type: s.series_type, series_key: s.series_key, model: res.winner, wape: res.models[res.winner].wape, bias: res.models[res.winner].bias, week_start: res.testWeeks[i], predicted_units: res.backtestPred[i], lower: null, upper: null, is_backtest: true, actual_units: res.testActual[i] });
-        for (let i = 0; i < 8; i++) outRows.push({ run_id: FORECAST_RUN, store_id: s.store_id, series_type: s.series_type, series_key: s.series_key, model: res.winner, wape: res.models[res.winner].wape, bias: res.models[res.winner].bias, week_start: res.forecastWeeks[i], predicted_units: res.forecast[i], lower: res.lower[i], upper: res.upper[i], is_backtest: false, actual_units: null });
-        for (const m of ["naive", "ma", "ses", "holt"]) {
-          if (m === res.winner) continue;
-          outRows.push({ run_id: FORECAST_RUN, store_id: s.store_id, series_type: s.series_type, series_key: s.series_key, model: m, wape: res.models[m].wape, bias: res.models[m].bias, week_start: res.forecastWeeks[0], predicted_units: res.models[m].forecast[0], lower: null, upper: null, is_backtest: false, actual_units: null });
-        }
+      if (res.notEnough) continue;
+      for (let i = 0; i < 8; i++) outRows.push({ run_id: FORECAST_RUN, store_id: s.store_id, series_type: s.series_type, series_key: s.series_key, model: res.winner, wape: res.models[res.winner].wape, bias: res.models[res.winner].bias, week_start: res.testWeeks[i], predicted_units: res.backtestPred[i], lower: null, upper: null, is_backtest: true, actual_units: res.testActual[i] });
+      for (let i = 0; i < 8; i++) outRows.push({ run_id: FORECAST_RUN, store_id: s.store_id, series_type: s.series_type, series_key: s.series_key, model: res.winner, wape: res.models[res.winner].wape, bias: res.models[res.winner].bias, week_start: res.forecastWeeks[i], predicted_units: res.forecast[i], lower: res.lower[i], upper: res.upper[i], is_backtest: false, actual_units: null });
+      for (const mdl of ["naive", "ma", "ses", "holt"]) {
+        if (mdl === res.winner) continue;
+        outRows.push({ run_id: FORECAST_RUN, store_id: s.store_id, series_type: s.series_type, series_key: s.series_key, model: mdl, wape: res.models[mdl].wape, bias: res.models[mdl].bias, week_start: res.forecastWeeks[0], predicted_units: res.models[mdl].forecast[0], lower: null, upper: null, is_backtest: false, actual_units: null });
       }
-      if (outRows.length) {
-        const orCond = data.series.map((x) => ({ store_id: x.store_id, series_type: x.series_type, series_key: x.series_key }));
-        const existing = await readAll(b, "Forecast", { run_id: FORECAST_RUN, $or: orCond }, ["id", "store_id", "series_type", "series_key", "model", "week_start", "is_backtest", "predicted_units", "lower", "upper", "wape", "bias", "actual_units"]);
-        const keyFn = (x) => `${x.store_id}|${x.series_type}|${x.series_key}|${x.model}|${x.week_start}|${x.is_backtest}`;
-        const r = await diffUpsert(b, "Forecast", outRows, keyFn, ["predicted_units", "lower", "upper", "wape", "bias", "actual_units"], existing);
-        writes += r.writes; if (r.stopped) { stopped = true; error = r.error; break; }
-      }
+    }
+
+    // Forecast rows for this run were cleared on slice 0, so every row here is a
+    // fresh create; diffUpsert still dedupes so no batch repeats a record.
+    let writes = 0; let stopped = false; let error = null;
+    if (outRows.length) {
+      const keyFn = (x) => `${x.store_id}|${x.series_type}|${x.series_key}|${x.model}|${x.week_start}|${x.is_backtest}`;
+      const r = await diffUpsert(b, "Forecast", outRows, keyFn, ["predicted_units", "lower", "upper", "wape", "bias", "actual_units"], []);
+      writes = r.writes; stopped = r.stopped; error = r.error;
     }
     return { sliceIndex: data.sliceIndex, writes, stopped, error };
   });
@@ -369,10 +421,10 @@ export const runAnomalyStore = createServerFn({ method: "POST" })
     const toDelete = existing.filter((x) => !newKeys.has(keyFn(x))).map((x) => x.id);
     let writes = 0; let stopped = false; let error = null;
     try {
-      if (toCreate.length) { for (let i = 0; i < toCreate.length; i += 500) { const s = toCreate.slice(i, i + 500); await b.entities.Anomaly.bulkCreate(s); writes += s.length; } }
-      if (toUpdate.length) { for (let i = 0; i < toUpdate.length; i += 500) { const s = toUpdate.slice(i, i + 500); await b.entities.Anomaly.bulkUpdate(s); writes += s.length; } }
-      if (toDelete.length) { for (let i = 0; i < toDelete.length; i += 500) { const s = toDelete.slice(i, i + 500); await b.entities.Anomaly.deleteMany({ id: { $in: s } }); writes += s.length; } }
-    } catch (e) { if (isLimit(e)) { stopped = true; error = limitMsg; } else throw e; }
+      if (toCreate.length) { for (let i = 0; i < toCreate.length; i += 500) { const s = toCreate.slice(i, i + 500); await withRate(() => b.entities.Anomaly.bulkCreate(s)); writes += s.length; } }
+      if (toUpdate.length) { for (let i = 0; i < toUpdate.length; i += 500) { const s = toUpdate.slice(i, i + 500); await withRate(() => b.entities.Anomaly.bulkUpdate(s)); writes += s.length; } }
+      if (toDelete.length) { for (let i = 0; i < toDelete.length; i += 500) { const s = toDelete.slice(i, i + 500); await withRate(() => b.entities.Anomaly.deleteMany({ id: { $in: s } })); writes += s.length; } }
+    } catch (e) { if (isDailyLimit(e)) { stopped = true; error = limitMsg; } else throw e; }
     return { storeId: data.storeId, writes, flagged: flagged.length, stopped, error };
   });
 

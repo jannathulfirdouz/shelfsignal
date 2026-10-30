@@ -5,23 +5,28 @@ import { Progress } from "@/components/ui/progress";
 
 // Reusable card that estimates writes, asks for confirmation, then runs a model
 // with a progress bar. `prepare()` returns { estimatedWrites, ...meta }. `run(onProgress)`
-// performs the chunked run, calling onProgress({ done, total }) and returning { writes }.
-export function RunCard({ title, description, lastRun, prepare, run, disabled }) {
+// performs the chunked run, calling onProgress({ done, total, waiting, seconds }).
+// `onBusyChange(bool)` lets the parent disable the other models while one is working.
+export function RunCard({ title, description, lastRun, prepare, run, disabled, onBusyChange }) {
   const [phase, setPhase] = useState("idle"); // idle | estimating | ready | running | done
   const [meta, setMeta] = useState(null);
-  const [prog, setProg] = useState({ done: 0, total: 0 });
+  const [prog, setProg] = useState({ done: 0, total: 0, waiting: false, seconds: null });
   const [result, setResult] = useState(null);
   const [err, setErr] = useState(null);
 
   const est = async () => {
     setPhase("estimating"); setErr(null); setResult(null);
+    onBusyChange?.(true);
     try { const e = await prepare(); setMeta(e); setPhase("ready"); }
     catch (e) { setErr(msg(e)); setPhase("idle"); }
+    finally { onBusyChange?.(false); }
   };
   const confirm = async () => {
-    setPhase("running"); setErr(null); setProg({ done: 0, total: 0 });
-    try { const r = await run((p) => setProg(p)); setResult(r); setPhase("done"); }
+    setPhase("running"); setErr(null); setProg({ done: 0, total: 0, waiting: false, seconds: null });
+    onBusyChange?.(true);
+    try { const r = await run((p) => setProg((cur) => ({ ...cur, ...p }))); setResult(r); setPhase("done"); }
     catch (e) { setErr(msg(e)); setPhase("ready"); }
+    finally { onBusyChange?.(false); }
   };
 
   return (
@@ -32,7 +37,7 @@ export function RunCard({ title, description, lastRun, prepare, run, disabled })
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-xs text-muted-foreground">Last run: {lastRun ? new Date(lastRun).toLocaleString("en-GB") : "never"}</p>
-        {phase === "idle" && <Button onClick={est} disabled={disabled}>Estimate & run</Button>}
+        {phase === "idle" && <Button onClick={est} disabled={disabled}>Estimate &amp; run</Button>}
         {phase === "estimating" && <p className="text-sm text-muted-foreground">Estimating writes…</p>}
         {phase === "ready" && (
           <div className="space-y-2">
@@ -42,7 +47,7 @@ export function RunCard({ title, description, lastRun, prepare, run, disabled })
             {meta?.skuCount != null && <p className="text-xs text-muted-foreground">{meta.skuCount.toLocaleString("en-GB")} store × SKU rows</p>}
             {meta?.stores?.length != null && <p className="text-xs text-muted-foreground">{meta.stores.length} stores to process</p>}
             <div className="flex gap-2">
-              <Button onClick={confirm}>Run now</Button>
+              <Button onClick={confirm} disabled={disabled}>Run now</Button>
               <Button variant="outline" onClick={() => setPhase("idle")}>Cancel</Button>
             </div>
           </div>
@@ -50,7 +55,11 @@ export function RunCard({ title, description, lastRun, prepare, run, disabled })
         {phase === "running" && (
           <div className="space-y-2">
             <Progress value={prog.total ? (prog.done / prog.total) * 100 : 5} />
-            <p className="text-xs text-muted-foreground">{prog.total ? `Processing ${prog.done}/${prog.total}…` : "Working…"}</p>
+            <p className="text-xs text-muted-foreground">
+              {prog.waiting
+                ? `Waiting for rate limit…${prog.seconds ? ` (~${prog.seconds}s)` : ""}`
+                : prog.total ? `Processing ${prog.done}/${prog.total}…` : "Working…"}
+            </p>
           </div>
         )}
         {phase === "done" && (
