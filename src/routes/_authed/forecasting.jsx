@@ -14,7 +14,7 @@ export const Route = createFileRoute("/_authed/forecasting")({
     seriesType: s.seriesType === "sku" ? "sku" : undefined,
     seriesKey: typeof s.seriesKey === "string" ? s.seriesKey : undefined,
   }),
-  loaderDeps: ({ search }) => ({ store: search.store, seriesType: search.seriesType, seriesKey: search.seriesKey }),
+  loaderDeps: ({ search }) => ({ storeId: search.store, seriesType: search.seriesType, seriesKey: search.seriesKey }),
   loader: ({ deps }) => getForecastData({ data: deps }),
   head: () => ({ meta: [{ title: "Forecasting · ShelfSignal" }] }),
   component: ForecastingPage,
@@ -54,7 +54,19 @@ function ForecastingPage() {
             <Field label="Series">
               <select value={(search.seriesType || "category") + "|" + (search.seriesKey || "")} onChange={(e) => { const [t, ...k] = e.target.value.split("|"); set({ seriesType: t === "sku" ? "sku" : undefined, seriesKey: k.join("|") || undefined }); }} className="h-9 rounded-md border border-input bg-background px-3 text-sm">
                 <option value="">Select a series</option>
-                {data.series.map((s) => <option key={s.series_key} value={`${s.series_type}|${s.series_key}`}>{s.series_type === "category" ? "Category" : "SKU"}: {s.label}</option>)}
+                {[["category", "Categories"], ["sku", "Top SKUs"]].map(([type, label]) => {
+                  const group = data.series.filter((s) => s.series_type === type);
+                  if (!group.length) return null;
+                  return (
+                    <optgroup key={type} label={label}>
+                      {group.map((s) => (
+                        <option key={`${s.series_type}|${s.series_key}`} value={`${s.series_type}|${s.series_key}`} disabled={s.notEnough}>
+                          {s.label}{s.notEnough ? " — not enough data" : ""}
+                        </option>
+                      ))}
+                    </optgroup>
+                  );
+                })}
               </select>
             </Field>
           )}

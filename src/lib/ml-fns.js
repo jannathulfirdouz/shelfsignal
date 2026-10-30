@@ -214,6 +214,16 @@ export const getForecastData = createServerFn({ method: "GET" })
       ...[...cats].sort().map((c) => ({ series_type: "category", series_key: c, label: c })),
       ...[...skuRev.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20).map(([sku]) => ({ series_type: "sku", series_key: sku, label: sku })),
     ];
+    // Latest-run forecasts for this store tell us which series actually have data;
+    // the rest (fewer than 16 complete weeks) are listed but flagged "not enough data".
+    const fkRows = await readAll(b, "Forecast", { ...scope, run_id: FORECAST_RUN, store_id: data.storeId }, ["series_type", "series_key"]);
+    const haveForecast = new Set(fkRows.map((r) => `${r.series_type}|${r.series_key}`));
+    const seen = new Set(series.map((s) => `${s.series_type}|${s.series_key}`));
+    for (const r of fkRows) {
+      const k = `${r.series_type}|${r.series_key}`;
+      if (!seen.has(k)) { seen.add(k); series.push({ series_type: r.series_type, series_key: r.series_key, label: r.series_key }); }
+    }
+    for (const s of series) s.notEnough = !haveForecast.has(`${s.series_type}|${s.series_key}`);
     if (!data.seriesKey) return { stores, series, actuals: [], backtest: [], forecast: [], comparison: [], winner: null };
 
     // actuals
@@ -221,7 +231,7 @@ export const getForecastData = createServerFn({ method: "GET" })
       .map((r) => ({ week_start: r.week_start, units: Math.round(Number(r.units) || 0) }))
       .sort((a, b) => (a.week_start < b.week_start ? -1 : 1));
 
-    const fRows = await readAll(b, "Forecast", { run_id: FORECAST_RUN, store_id: data.storeId, series_type: data.seriesType, series_key: data.seriesKey }, ["model", "week_start", "is_backtest", "predicted_units", "lower", "upper", "wape", "bias", "actual_units"]);
+    const fRows = await readAll(b, "Forecast", { ...scope, run_id: FORECAST_RUN, store_id: data.storeId, series_type: data.seriesType, series_key: data.seriesKey }, ["model", "week_start", "is_backtest", "predicted_units", "lower", "upper", "wape", "bias", "actual_units"]);
     const backtest = fRows.filter((r) => r.is_backtest).map((r) => ({ week_start: r.week_start, predicted: r.predicted_units, actual: r.actual_units })).sort((a, b) => (a.week_start < b.week_start ? -1 : 1));
     const winnerRows = fRows.filter((r) => !r.is_backtest);
     const forecast = winnerRows.filter((r) => r.lower != null || r.upper != null).map((r) => ({ week_start: r.week_start, predicted: r.predicted_units, lower: r.lower, upper: r.upper })).sort((a, b) => (a.week_start < b.week_start ? -1 : 1));
