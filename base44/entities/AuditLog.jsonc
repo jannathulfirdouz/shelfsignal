@@ -30,7 +30,11 @@
     "entity"
   ],
   "rls": {
-    "read": {},
+    "read": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    },
     "create": {},
     "update": {
       "user_condition": {
