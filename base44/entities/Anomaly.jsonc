@@ -27,6 +27,13 @@
         "high",
         "low"
       ]
+    },
+    "abs_diff": {
+      "type": "number"
+    },
+    "peak_season": {
+      "type": "boolean",
+      "default": false
     }
   },
   "required": [
@@ -35,42 +42,7 @@
     "date"
   ],
   "rls": {
-    "read": {
-      "$or": [
-        {
-          "user_condition": {
-            "data.app_role": "owner"
-          }
-        },
-        {
-          "user_condition": {
-            "data.app_role": "analyst"
-          }
-        },
-        {
-          "user_condition": {
-            "data.app_role": "viewer"
-          }
-        },
-        {
-          "$and": [
-            {
-              "user_condition": {
-                "data.app_role": "store_manager"
-              }
-            },
-            {
-              "data.store_id": "{{user.data.store_id}}"
-            },
-            {
-              "data.store_id": {
-                "$ne": ""
-              }
-            }
-          ]
-        }
-      ]
-    },
+    "read": {},
     "create": {
       "$or": [
         {
