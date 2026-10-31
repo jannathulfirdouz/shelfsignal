@@ -266,7 +266,10 @@ export function abcXyz(rows) {
 
 // ---------------- Anomaly detection ----------------
 // series: [{ date, value }] trading days, sorted ascending
-export function detectAnomalies(series, window = 28) {
+// A day is flagged only when it is both statistically unusual (|z| > 3) and
+// materially large in money terms (|actual - expected| >= minGbp). Without the
+// second test, small-variance categories produce a crowd of trivial flags.
+export function detectAnomalies(series, window = 28, minGbp = 500) {
   const out = [];
   for (let i = window; i < series.length; i++) {
     const w = series.slice(i - window, i).map((d) => d.value);
@@ -274,7 +277,19 @@ export function detectAnomalies(series, window = 28) {
     const sd = Math.sqrt(w.reduce((a, c) => a + (c - mean) ** 2, 0) / window);
     if (sd <= 0) continue;
     const z = (series[i].value - mean) / sd;
-    if (Math.abs(z) > 3) out.push({ date: series[i].date, expected: r2(mean), actual: r2(series[i].value), z_score: r4(z), direction: z > 0 ? "high" : "low" });
+    if (Math.abs(z) <= 3) continue;
+    const absDiff = Math.abs(series[i].value - mean);
+    if (absDiff < minGbp) continue;
+    const month = Number(String(series[i].date).slice(5, 7));
+    out.push({
+      date: series[i].date,
+      expected: r2(mean),
+      actual: r2(series[i].value),
+      z_score: r4(z),
+      direction: z > 0 ? "high" : "low",
+      abs_diff: r2(absDiff),
+      peak_season: month === 11 || month === 12,
+    });
   }
   return out;
 }

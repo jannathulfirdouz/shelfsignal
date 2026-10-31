@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireUser } from "@/lib/auth-middleware";
+import { requireUser, allowAnonymous } from "@/lib/auth-middleware";
 import { storeScope } from "@/lib/store-scope.server";
 import { readAll, withRate, audit } from "@/lib/ml-fns";
 
@@ -17,12 +17,14 @@ const mean = (a) => (a.length ? a.reduce((x, c) => x + c, 0) / a.length : 0);
 const std = (a) => { if (a.length < 2) return 0; const m = mean(a); return Math.sqrt(a.reduce((x, c) => x + (c - m) ** 2, 0) / a.length); };
 function addDays(d, n) { const x = new Date(d + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); }
 
-// WAPE below 20% with trust >= 95 is high; 20-35% is medium; otherwise (or no forecast) low.
+// Confidence rule: forecast WAPE below 25% is high, 25% to 45% is medium, above 45%
+// (or no forecast for the series) is low. A trust score under 90% downgrades the
+// result by one level. Shown as a tooltip on every Action centre card.
 function confidenceFor(wape, trust) {
   if (wape == null || !isFinite(wape)) return "low";
-  if (wape < 0.20 && trust != null && trust >= 95) return "high";
-  if (wape >= 0.20 && wape <= 0.35) return "medium";
-  return "low";
+  let level = wape < 0.25 ? "high" : wape <= 0.45 ? "medium" : "low";
+  if (trust != null && trust < 90) level = level === "high" ? "medium" : "low";
+  return level;
 }
 const keyOf = (r) => [r.type, r.store_id || "", r.sku || "", r.category || "", r.customer_ref || ""].join("|");
 
@@ -66,6 +68,8 @@ export const generateRecommendations = createServerFn({ method: "POST" })
     // Weekly units over the last 8 weeks (last 4 for demand, 8 for volatility).
     const weekly = new Map();
     const maxW = (await b.entities.SalesWeeklySummary.filter(scope, { sort: "-week_start", limit: 1, fields: ["week_start"] })).items?.[0]?.week_start;
+    const seasonMonth = maxW ? Number(String(maxW).slice(5, 7)) : 0;
+    const peakSeason = seasonMonth === 11 || seasonMonth === 12;
     if (maxW) {
       const from = addDays(maxW, -55);
       const rows = await readAll(b, "SalesWeeklySummary", { ...scope, week_start: { $gte: from } }, ["store_id", "sku", "week_start", "units"]);
@@ -111,11 +115,18 @@ export const generateRecommendations = createServerFn({ method: "POST" })
       const reorderPoint = weeklyDemand * (leadTime / 7) + safety;
       const available = onHand + onOrder;
       const simulated = !!row.is_simulated;
+      const pc = pclass.get(key);
+
+      // Seasonal guard: when the window includes November/December peak trading, or the
+      // series is flagged as a rising trend, the forecast over-states January demand, so
+      // the order quantity is sized on the last 8 weeks of actuals instead.
+      const seasonalGuard = peakSeason || (fc?.flag === "Check: rising trend");
+      const orderDemand = seasonalGuard ? mean(wk.slice(-8)) : weeklyDemand;
 
       // Reorder
       if (available < reorderPoint || onHand === 0) {
         const shortfall = Math.max(0, reorderPoint - available);
-        const rawQty = Math.max(0, Math.ceil(reorderPoint + 2 * weeklyDemand - available));
+        const rawQty = Math.max(0, Math.ceil(reorderPoint + 2 * orderDemand - available));
         const orderQty = Math.ceil(rawQty / moq) * moq;
         const price = num(p.unit_price) || num(p.unit_cost);
         const base = `On hand ${onHand} and on order ${onOrder}, below the reorder point of ${r0(reorderPoint)} units. Supplier lead time is ${leadTime} days. ` +
@@ -123,14 +134,13 @@ export const generateRecommendations = createServerFn({ method: "POST" })
         recs.push({
           type: "reorder", store_id: row.store_id, sku: row.sku, category: p.category || "", customer_ref: "",
           title: `Reorder ${row.sku}${p.name ? ` — ${p.name}` : ""}`,
-          reason: base + (simulated ? " Based on simulated stock." : ""),
-          metrics: { on_hand: onHand, on_order: onOrder, available, reorder_point: r0(reorderPoint), safety_stock: r0(safety), weekly_demand: r0(weeklyDemand), std_weekly_units: r2(sd8), lead_time_days: leadTime, min_order_qty: moq, order_qty: orderQty, unit_price: r2(p.unit_price), unit_cost: r2(p.unit_cost), shortfall_units: r0(shortfall), wape: fc ? num(fc.wape) : null, model: fc ? fc.model : null, is_simulated: simulated, trust_score: trust },
+          reason: base + (seasonalGuard ? " Peak-season guard: the order quantity uses the last 8 weeks of actuals, so re-check it for January before ordering." : "") + (simulated ? " Based on simulated stock." : ""),
+          metrics: { on_hand: onHand, on_order: onOrder, available, reorder_point: r0(reorderPoint), safety_stock: r0(safety), weekly_demand: r0(weeklyDemand), order_demand_used: r0(orderDemand), seasonal_guard: seasonalGuard, abc_class: pc?.abc_class ?? null, std_weekly_units: r2(sd8), lead_time_days: leadTime, min_order_qty: moq, order_qty: orderQty, unit_price: r2(p.unit_price), unit_cost: r2(p.unit_cost), shortfall_units: r0(shortfall), wape: fc ? num(fc.wape) : null, model: fc ? fc.model : null, is_simulated: simulated, trust_score: trust },
           confidence: confidenceFor(fc ? num(fc.wape) : null, trust), expected_impact_gbp: r0(shortfall * price),
         });
       }
 
       // Markdown: ABC C or XYZ Z with stock cover above 120 days.
-      const pc = pclass.get(key);
       if (pc && (pc.abc_class === "C" || pc.xyz_class === "Z") && onHand > 0) {
         const avgDaily = avg4 / 7;
         const cover = avgDaily > 0 ? onHand / avgDaily : Infinity;
@@ -186,7 +196,7 @@ export const generateRecommendations = createServerFn({ method: "POST" })
         title: `Check: rising trend — ${sku} in ${store_id}`,
         reason: `${sku} forecast averages ${r0(fc.weekly)} units per week over 8 weeks, ${r0(risePct)}% above the last 8 weeks of actuals (${r0(last8)} units). Check: rising trend.`,
         metrics: { weekly_forecast: r0(fc.weekly), last8_avg_units: r0(last8), rise_pct: r0(risePct), wape: num(fc.wape), model: fc.model, trust_score: trust },
-        confidence: confidenceFor(num(fc.wape), trust), expected_impact_gbp: r0(Math.max(0, fc.weekly - last8) * price * 8),
+        confidence: confidenceFor(num(fc.wape), trust), expected_impact_gbp: r0(Math.abs(fc.weekly - last8) * price * 8),
       });
     }
 
@@ -230,7 +240,7 @@ export const generateRecommendations = createServerFn({ method: "POST" })
   });
 
 export const getRecommendations = createServerFn({ method: "GET" })
-  .middleware([requireUser])
+  .middleware([allowAnonymous])
   .handler(async ({ context }) => {
     const b = context.getBase44();
     const scope = storeScope(context.user);
@@ -266,6 +276,8 @@ export const explainRecommendation = createServerFn({ method: "POST" })
   .validator(z.object({ id: z.string() }))
   .handler(async ({ data, context }) => {
     const b = context.getBase44();
+    // Spending an AI credit needs a signed-in caller.
+    if (!context.user) throw Object.assign(new Error("Sign in to generate an explanation"), { status: 401 });
     const rec = await b.entities.Recommendation.get(data.id);
     if (rec.ai_explanation) return { explanation: rec.ai_explanation };
     const prompt = `You are a retail operations assistant. Explain this recommendation in at most 3 short sentences for a store manager. Use ONLY the numbers in the metrics JSON. Do not invent any figure, product, supplier or date. Do not add advice beyond the recommendation.\n\nRecommendation: ${rec.title}\nType: ${rec.type}\nReason: ${rec.reason}\nMetrics JSON: ${JSON.stringify(rec.metrics || {})}`;

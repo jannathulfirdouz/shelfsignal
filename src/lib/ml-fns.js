@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireUser } from "@/lib/auth-middleware";
+import { requireUser, allowAnonymous } from "@/lib/auth-middleware";
 import { storeScope } from "@/lib/store-scope.server";
 import { forecastSeries, segmentCustomers, abcXyz, detectAnomalies, pickWinner, FORECAST_MODELS, rfmRuleSegments } from "@/lib/ml.server";
 
@@ -154,7 +154,7 @@ export const runForecastChunk = createServerFn({ method: "POST" })
       // Keep only the latest run's Forecast rows; history lives in ForecastRun.
       // asServiceRole so analysts can re-run too (Forecast delete is owner-only).
       try { await b.asServiceRole.entities.Forecast.deleteMany({}); } catch { /* best-effort */ }
-      await b.entities.ForecastRun.create({ run_id: data.runId, created_by: user.email || user.id, created_at: new Date().toISOString(), series_count: data.totalSeries, notes: "" });
+      await b.entities.ForecastRun.create({ run_id: data.runId, created_by: user.email || user.id, created_at: new Date().toISOString(), series_count: 0, series_total: data.totalSeries, skipped_count: 0, notes: "" });
     }
 
     // One large paged read for every series in this chunk instead of one request
@@ -170,12 +170,21 @@ export const runForecastChunk = createServerFn({ method: "POST" })
     }
 
     const outRows = [];
+    const skips = [];
     let wapeSum = 0, seriesCount = 0;
     for (const s of data.series) {
       const m = (s.series_type === "category" ? catBy : skuBy).get(`${s.store_id}|${s.series_key}`);
       const weeks = m ? [...m.entries()].sort((a, c) => (a[0] < c[0] ? -1 : 1)).map(([week_start, units]) => ({ week_start, units })) : [];
       const res = forecastSeries(weeks);
-      if (res.notEnough) continue;
+      if (res.notEnough) {
+        // Recorded so the run can report every series it could not model, and why.
+        const complete = weeks.filter((w) => w.week_start < PARTIAL_WEEK).length;
+        skips.push({
+          store_id: s.store_id, series_type: s.series_type, series_key: s.series_key,
+          reason: complete === 0 ? "No complete weeks of sales history" : `Only ${complete} complete weeks of history; 16 are needed`,
+        });
+        continue;
+      }
       wapeSum += res.models[res.winner].wape; seriesCount++;
       const flag = res.risingTrend ? "Check: rising trend" : "";
       for (let i = 0; i < 8; i++) outRows.push({ run_id: data.runId, store_id: s.store_id, series_type: s.series_type, series_key: s.series_key, model: res.winner, wape: res.models[res.winner].wape, bias: res.models[res.winner].bias, week_start: res.testWeeks[i], predicted_units: res.backtestPred[i], lower: null, upper: null, is_backtest: true, actual_units: res.testActual[i], flag: "" });
@@ -194,24 +203,35 @@ export const runForecastChunk = createServerFn({ method: "POST" })
       const r = await diffUpsert(b, "Forecast", outRows, keyFn, ["predicted_units", "lower", "upper", "wape", "bias", "actual_units", "flag"], []);
       writes = r.writes; stopped = r.stopped; error = r.error;
     }
-    return { sliceIndex: data.sliceIndex, writes, stopped, error, wapeSum, seriesCount };
+    return { sliceIndex: data.sliceIndex, writes, stopped, error, wapeSum, seriesCount, skips };
   });
 
 export const finalizeForecastRun = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .validator(z.object({ runId: z.string().min(1), avgWape: z.number(), seriesCount: z.number().int().nonnegative(), writes: z.number().int().nonnegative() }))
+  .validator(z.object({
+    runId: z.string().min(1), avgWape: z.number(), seriesCount: z.number().int().nonnegative(), writes: z.number().int().nonnegative(),
+    seriesTotal: z.number().int().nonnegative().optional(),
+    skipped: z.array(z.object({ store_id: z.string(), series_type: z.string(), series_key: z.string(), reason: z.string().max(200) })).max(500).optional(),
+  }))
   .handler(async ({ data, context }) => {
     if (!canRun(context.user)) throw forbid();
     const b = context.getBase44();
+    const skipped = data.skipped ?? [];
     const p = await b.entities.ForecastRun.filter({ run_id: data.runId }, { limit: 1 });
     const rec = p.items?.[0];
-    if (rec) await b.entities.ForecastRun.update(rec.id, { avg_wape: data.avgWape, series_count: data.seriesCount });
-    await audit(b, context.user, { action: "run_forecast", entity: "Forecast", record_ref: data.runId, detail: `${data.seriesCount} series, ${data.writes} writes, avg WAPE ${(data.avgWape * 100).toFixed(1)}%` });
+    if (rec) await b.entities.ForecastRun.update(rec.id, {
+      avg_wape: data.avgWape,
+      series_count: data.seriesCount,
+      series_total: data.seriesTotal ?? data.seriesCount + skipped.length,
+      skipped_count: skipped.length,
+      notes: JSON.stringify(skipped),
+    });
+    await audit(b, context.user, { action: "run_forecast", entity: "Forecast", record_ref: data.runId, detail: `${data.seriesCount} series forecast, ${skipped.length} skipped, ${data.writes} writes, avg WAPE ${(data.avgWape * 100).toFixed(1)}%` });
     return { ok: true };
   });
 
 export const getForecastData = createServerFn({ method: "GET" })
-  .middleware([requireUser])
+  .middleware([allowAnonymous])
   .validator(z.object({ storeId: z.string().optional(), seriesType: z.string().optional(), seriesKey: z.string().optional() }))
   .handler(async ({ data, context }) => {
     const b = context.getBase44();
@@ -221,9 +241,19 @@ export const getForecastData = createServerFn({ method: "GET" })
 
     // Latest run + history (most recent first).
     const runPage = await b.entities.ForecastRun.filter({}, { sort: "-created_at", limit: 12 });
-    const runs = (runPage.items ?? []).map((r) => ({ run_id: r.run_id, created_at: r.created_at, created_by: r.created_by, series_count: r.series_count ?? null, avg_wape: r.avg_wape ?? null }));
+    const runs = (runPage.items ?? []).map((r) => ({ run_id: r.run_id, created_at: r.created_at, created_by: r.created_by, series_count: r.series_count ?? null, series_total: r.series_total ?? null, skipped_count: r.skipped_count ?? null, avg_wape: r.avg_wape ?? null }));
     const runId = runs[0]?.run_id ?? null;
-    const empty = { stores, series: [], actuals: [], backtest: [], forecast: [], comparison: [], winner: null, selectionReason: "", risingTrend: false, runs, runId };
+    const latest = runPage.items?.[0] ?? null;
+    let skipped = [];
+    try { skipped = latest?.notes ? JSON.parse(latest.notes) : []; } catch { skipped = []; }
+    const coverage = {
+      seriesTotal: latest?.series_total ?? runs[0]?.series_total ?? null,
+      seriesCount: latest?.series_count ?? runs[0]?.series_count ?? null,
+      skippedCount: latest?.skipped_count ?? runs[0]?.skipped_count ?? skipped.length ?? null,
+      skipped,
+      createdAt: latest?.created_at ?? null,
+    };
+    const empty = { stores, series: [], actuals: [], backtest: [], forecast: [], comparison: [], winner: null, selectionReason: "", risingTrend: false, runs, runId, coverage };
     if (!data.storeId) return empty;
 
     const storeRows = sumRows.filter((r) => r.store_id === data.storeId);
@@ -264,7 +294,7 @@ export const getForecastData = createServerFn({ method: "GET" })
     const { winner, reason } = pickWinner(Object.fromEntries(byModel));
     const comparison = [...byModel.values()].map((m) => ({ ...m, isWinner: m.model === winner }));
     const risingTrend = fRows.some((r) => r.flag === "Check: rising trend");
-    return { stores, series, actuals, backtest, forecast, comparison, winner, selectionReason: reason, risingTrend, runs, runId };
+    return { stores, series, actuals, backtest, forecast, comparison, winner, selectionReason: reason, risingTrend, runs, runId, coverage };
   });
 
 // ============ 2. Customer segmentation ============
@@ -326,7 +356,7 @@ export const upsertSegmentChunk = createServerFn({ method: "POST" })
   });
 
 export const getSegmentData = createServerFn({ method: "GET" })
-  .middleware([requireUser])
+  .middleware([allowAnonymous])
   .validator(z.object({ segment: z.string().optional() }))
   .handler(async ({ data, context }) => {
     const b = context.getBase44();
@@ -403,7 +433,7 @@ export const runAbcXyzStore = createServerFn({ method: "POST" })
   });
 
 export const getAbcXyzMatrix = createServerFn({ method: "GET" })
-  .middleware([requireUser])
+  .middleware([allowAnonymous])
   .validator(z.object({ storeId: z.string().optional() }))
   .handler(async ({ data, context }) => {
     const b = context.getBase44();
@@ -416,7 +446,7 @@ export const getAbcXyzMatrix = createServerFn({ method: "GET" })
   });
 
 export const getAbcXyzSkus = createServerFn({ method: "GET" })
-  .middleware([requireUser])
+  .middleware([allowAnonymous])
   .validator(z.object({ storeId: z.string().optional(), abc: z.enum(["A", "B", "C"]), xyz: z.enum(["X", "Y", "Z"]) }))
   .handler(async ({ data, context }) => {
     const b = context.getBase44();
@@ -466,15 +496,15 @@ export const runAnomalyStore = createServerFn({ method: "POST" })
     const flagged = [];
     for (const [cat, dayMap] of byCat) {
       const series = [...dayMap.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([date, value]) => ({ date, value }));
-      for (const a of detectAnomalies(series)) flagged.push({ store_id: data.storeId, category: cat, date: a.date, expected: a.expected, actual: a.actual, z_score: a.z_score, direction: a.direction });
+      for (const a of detectAnomalies(series)) flagged.push({ store_id: data.storeId, category: cat, date: a.date, expected: a.expected, actual: a.actual, z_score: a.z_score, direction: a.direction, abs_diff: a.abs_diff, peak_season: a.peak_season });
     }
     // diff against existing for the store
-    const existing = await readAll(b, "Anomaly", { store_id: data.storeId }, ["id", "category", "date", "expected", "actual", "z_score", "direction"]);
+    const existing = await readAll(b, "Anomaly", { store_id: data.storeId }, ["id", "category", "date", "expected", "actual", "z_score", "direction", "abs_diff", "peak_season"]);
     const keyFn = (x) => `${x.category}|${x.date}`;
     const exMap = new Map(existing.map((x) => [keyFn(x), x]));
     const newKeys = new Set(flagged.map(keyFn));
     const toCreate = []; const toUpdate = [];
-    for (const row of flagged) { const ex = exMap.get(keyFn(row)); if (!ex) toCreate.push(row); else { let diff = false; for (const f of ["expected", "actual", "z_score", "direction"]) if (ex[f] !== row[f]) { diff = true; break; } if (diff) toUpdate.push({ id: ex.id, ...row }); } }
+    for (const row of flagged) { const ex = exMap.get(keyFn(row)); if (!ex) toCreate.push(row); else { let diff = false; for (const f of ["expected", "actual", "z_score", "direction", "abs_diff", "peak_season"]) if (ex[f] !== row[f]) { diff = true; break; } if (diff) toUpdate.push({ id: ex.id, ...row }); } }
     const toDelete = existing.filter((x) => !newKeys.has(keyFn(x))).map((x) => x.id);
     let writes = 0; let stopped = false; let error = null;
     try {
@@ -486,12 +516,12 @@ export const runAnomalyStore = createServerFn({ method: "POST" })
   });
 
 export const getAnomalies = createServerFn({ method: "GET" })
-  .middleware([requireUser])
+  .middleware([allowAnonymous])
   .validator(z.object({ storeId: z.string().optional() }))
   .handler(async ({ data, context }) => {
     const b = context.getBase44();
     const scope = storeScope(context.user);
     const q = { ...scope }; if (data.storeId) q.store_id = data.storeId;
-    const rows = await readAll(b, "Anomaly", q, ["store_id", "category", "date", "expected", "actual", "z_score", "direction"]);
+    const rows = await readAll(b, "Anomaly", q, ["store_id", "category", "date", "expected", "actual", "z_score", "direction", "abs_diff", "peak_season"]);
     return rows.sort((a, b) => (a.date < b.date ? 1 : -1));
   });

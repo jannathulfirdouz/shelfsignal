@@ -50,6 +50,14 @@ export const requireUser = createMiddleware({ type: "function" }).server(async (
   return next({ context: { user } });
 });
 
+// For READ-ONLY server functions that a public demo visitor may also call. It never
+// rejects: `context.user` is the signed-in user, or null for an anonymous demo visitor.
+// Entity access rules still apply to whatever the handler reads.
+export const allowAnonymous = createMiddleware({ type: "function" }).server(async ({ next, context }) => {
+  const user = await currentUser(context);
+  return next({ context: { user: user ?? null } });
+});
+
 // The same for a server route: `server: { middleware: [requireUserRoute], handlers }` answers
 // anonymous callers with 401 and sets `context.user`. Only on src/routes/api/* files: a route's
 // middleware also runs for every route under it, and page navigations carry no token.

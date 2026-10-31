@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireUser } from "@/lib/auth-middleware";
+import { requireUser, allowAnonymous } from "@/lib/auth-middleware";
 import { storeScope } from "@/lib/store-scope.server";
 import { netRevenueTotal, outlierContribs, loadProductsMap } from "@/lib/revenue.server";
 
@@ -109,12 +109,15 @@ const METRICS = [
   { name: "Stock cover days", formula: "On-hand units divided by average daily units over the last 4 weeks.", owner: "ShelfSignal", notes: "Inventory page." },
   { name: "Sell-through %", formula: "Units sold divided by (units sold plus on-hand).", owner: "ShelfSignal", notes: "Inventory page." },
   { name: "Trust Score", formula: "Weighted pass rate of the active data quality rules.", owner: "ShelfSignal", notes: "" },
+  { name: "Reorder impact (GBP)", formula: "Shortfall units (reorder point minus on-hand and on-order units, floored at zero) times unit price.", owner: "ShelfSignal", notes: "Reorder recommendations in the Action centre." },
+  { name: "Markdown impact (GBP)", formula: "On-hand units at risk of write-off times unit cost.", owner: "ShelfSignal", notes: "Markdown recommendations in the Action centre." },
+  { name: "Investigate impact (GBP)", formula: "Absolute difference between actual and expected revenue on the flagged days, summed.", owner: "ShelfSignal", notes: "Investigate recommendations in the Action centre." },
+  { name: "Re-engage impact (GBP)", formula: "The customer's historic monetary value (quantity times unit price across all orders).", owner: "ShelfSignal", notes: "Re-engage recommendations in the Action centre." },
 ];
 
-export const getMetricDefinitions = createServerFn({ method: "GET" })
-  .middleware([requireUser])
-  .handler(async ({ context }) => {
-    const b = context.getBase44();
+// Keeps the stored definitions in step with METRICS. Writes records, so it runs
+// only for a signed-in visitor; the public demo reads the definitions as they are.
+async function seedMetrics(b) {
     const page = await b.entities.MetricDefinition.filter({}, { limit: 50 });
     const byName = new Map((page.items ?? []).map((x) => [x.name, x]));
     const toCreate = [];
@@ -126,13 +129,20 @@ export const getMetricDefinitions = createServerFn({ method: "GET" })
     }
     if (toCreate.length) await b.entities.MetricDefinition.bulkCreate(toCreate);
     if (toUpdate.length) await b.entities.MetricDefinition.bulkUpdate(toUpdate);
+}
+
+export const getMetricDefinitions = createServerFn({ method: "GET" })
+  .middleware([allowAnonymous])
+  .handler(async ({ context }) => {
+    const b = context.getBase44();
+    if (context.user) await seedMetrics(b);
     const all = await b.entities.MetricDefinition.filter({}, { limit: 50 });
     return all.items ?? [];
   });
 
 // ---- Home -------------------------------------------------------------------
 export const getHomeData = createServerFn({ method: "GET" })
-  .middleware([requireUser])
+  .middleware([allowAnonymous])
   .validator(FilterInput)
   .handler(async ({ data, context }) => {
     const b = context.getBase44();
@@ -195,7 +205,7 @@ export const getHomeData = createServerFn({ method: "GET" })
 
 // ---- Sales ------------------------------------------------------------------
 export const getSalesAnalytics = createServerFn({ method: "GET" })
-  .middleware([requireUser])
+  .middleware([allowAnonymous])
   .validator(FilterInput)
   .handler(async ({ data, context }) => {
     const b = context.getBase44();
@@ -275,7 +285,7 @@ async function loadSuppliers(b) {
 }
 
 export const getInventoryAnalytics = createServerFn({ method: "GET" })
-  .middleware([requireUser])
+  .middleware([allowAnonymous])
   .validator(z.object({ store: z.string().optional() }))
   .handler(async ({ data, context }) => {
     const b = context.getBase44();

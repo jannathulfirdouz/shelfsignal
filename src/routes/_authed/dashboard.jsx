@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { getDashboardData } from "@/lib/server-fns";
+import { requireSignedIn } from "@/components/auth/AuthGate";
 import { useAuth } from "@/lib/AuthContext";
 import { TrustBadge } from "@/components/TrustBadge";
 import { DataTrustBadge } from "@/components/DataTrustBadge";
@@ -10,6 +11,8 @@ import { ShieldCheck, ShoppingBag, AlertTriangle, Package, Users, Database, Stor
 
 export const Route = createFileRoute("/_authed/dashboard")({
   ssr: false,
+  // Signed-in only: it reads user and role information the public demo must not see.
+  beforeLoad: requireSignedIn,
   loader: () => getDashboardData(),
   head: () => ({ meta: [{ title: "Dashboard · ShelfSignal" }] }),
   component: Dashboard,

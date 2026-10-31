@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireUser } from "@/lib/auth-middleware";
+import { requireUser, allowAnonymous } from "@/lib/auth-middleware";
 import { storeScope } from "@/lib/store-scope.server";
 import { seedDictionary } from "@/lib/data-dictionary.server";
 
@@ -16,11 +16,14 @@ async function audit(b, user, { action, entity, record_ref, detail }) {
 
 // ---- One load for the Governance page: seed dictionary, return all data -------
 export const getGovernanceData = createServerFn({ method: "GET" })
-  .middleware([requireUser])
+  .middleware([allowAnonymous])
   .handler(async ({ context }) => {
-    if (!canGovern(context.user)) throw forbid();
+    // Signed-in owners and analysts get the full view; a public demo visitor gets the
+    // dictionary, metrics and lineage read-only, and never the audit log.
+    if (context.user && !canGovern(context.user)) throw forbid();
     const b = context.getBase44();
-    const seed = await seedDictionary(b);
+    const demo = !context.user;
+    const seed = demo ? { created: 0, repaired: 0 } : await seedDictionary(b);
 
     let cursor;
     const dictionary = [];
@@ -28,10 +31,10 @@ export const getGovernanceData = createServerFn({ method: "GET" })
 
     const metrics = (await b.entities.MetricDefinition.filter({}, { limit: 50 })).items ?? [];
 
-    const auditPage = await b.entities.AuditLog.filter({}, { sort: "-timestamp", limit: 300 });
+    const auditPage = demo ? { items: [] } : await b.entities.AuditLog.filter({}, { sort: "-timestamp", limit: 300 });
     const auditLog = auditPage.items ?? [];
 
-    return { seed, dictionary, metrics, auditLog };
+    return { seed, dictionary, metrics, auditLog, demo };
   });
 
 // ---- Edit a dictionary entry (definition + owner) ----------------------------
@@ -97,7 +100,7 @@ const KPI_MAP = {
 };
 
 export const getLineage = createServerFn({ method: "GET" })
-  .middleware([requireUser])
+  .middleware([allowAnonymous])
   .validator(z.object({ kpi: z.enum(["net_revenue", "gross_margin", "return_rate", "stock_cover"]) }))
   .handler(async ({ data, context }) => {
     if (!canGovern(context.user)) throw forbid();

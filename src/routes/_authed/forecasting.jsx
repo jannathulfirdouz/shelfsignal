@@ -73,6 +73,40 @@ function ForecastingPage() {
         </CardContent>
       </Card>
 
+      {data.coverage?.seriesTotal ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Series coverage</CardTitle>
+            <CardDescription>
+              Latest run: {data.coverage.seriesCount ?? 0} of {data.coverage.seriesTotal} series forecast,{" "}
+              {data.coverage.skippedCount ?? 0} skipped
+              {data.coverage.createdAt ? ` · ${new Date(data.coverage.createdAt).toLocaleString("en-GB", { timeZone: "UTC" })}` : ""}.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {data.coverage.skipped?.length ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="text-left text-muted-foreground"><tr>{["Store", "Type", "Series", "Why it was skipped"].map((c) => <th key={c} className="pb-2 pr-4 font-medium">{c}</th>)}</tr></thead>
+                  <tbody>
+                    {data.coverage.skipped.map((s, i) => (
+                      <tr key={`${s.store_id}-${s.series_type}-${s.series_key}-${i}`} className="border-t border-border">
+                        <td className="py-2 pr-4">{s.store_id}</td>
+                        <td className="py-2 pr-4">{s.series_type}</td>
+                        <td className="py-2 pr-4">{s.series_key}</td>
+                        <td className="py-2 pr-4 text-muted-foreground">{s.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">Every series in this run had enough history to be forecast.</p>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
+
       {search.store && search.seriesKey ? (
         <>
           <Card>

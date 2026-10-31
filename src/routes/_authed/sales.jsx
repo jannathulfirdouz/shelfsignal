@@ -8,7 +8,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { PageFilters } from "@/components/PageFilters";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ComposedChart, Bar, Line, Cell, LabelList, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, BarChart, Scatter } from "recharts";
+import { ComposedChart, Bar, Line, Cell, LabelList, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, BarChart } from "recharts";
 
 export const Route = createFileRoute("/_authed/sales")({
   ssr: false,
@@ -38,7 +38,10 @@ function SalesPage() {
   const getAnoms = useServerFn(getAnomalies);
   const [anoms, setAnoms] = useState([]);
   useEffect(() => { getAnoms({ data: { storeId: search.store } }).then(setAnoms).catch(() => setAnoms([])); }, [search.store]);
-  const anomalyMarks = anoms.map((a) => ({ month: String(a.date).slice(0, 7), anomaly: a.actual }));
+  // Anomaly days are counted per calendar month and shown above that month's bar,
+  // so the badge sits on the month the anomaly belongs to (dates are per day).
+  const anomalyByMonth = anoms.reduce((m, a) => { const k = String(a.date).slice(0, 7); m[k] = (m[k] || 0) + 1; return m; }, {});
+  const monthlyRows = data.monthly.map((m) => ({ ...m, anomalyCount: anomalyByMonth[m.month] || 0 }));
 
   const countriesAll = data.topCountries || [];
   const countriesShown = (excludeUK ? countriesAll.filter((c) => c.country !== "United Kingdom") : countriesAll).slice(0, 10);
@@ -61,19 +64,19 @@ function SalesPage() {
           {data.monthly.length === 0 ? <Empty /> : (
             <>
               <ResponsiveContainer width="100%" height={300}>
-                <ComposedChart data={data.monthly}>
+                <ComposedChart data={monthlyRows}>
                   <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                   <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                  <YAxis yAxisId="l" domain={[0, "auto"]} tick={{ fontSize: 11 }} tickFormatter={(v) => `£${v}`} />
+                  <YAxis yAxisId="l" domain={[0, (max) => Math.ceil(max * 1.22)]} tick={{ fontSize: 11 }} tickFormatter={(v) => `£${v}`} />
                   <YAxis yAxisId="r" orientation="right" tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
                   <Tooltip formatter={(v, n) => (n === "MoM change %" ? `${v}%` : fmtGbp(v))} />
                   <Bar yAxisId="l" dataKey="netRevenue" name="Net revenue" radius={[4, 4, 0, 0]}>
-                    {data.monthly.map((m) => (
+                    {monthlyRows.map((m) => (
                       <Cell key={m.month} fill={m.month === data.partialMonth ? "hsl(var(--accent) / 0.4)" : "hsl(var(--accent))"} />
                     ))}
+                    <LabelList dataKey="anomalyCount" position="top" formatter={(v) => (v ? `${v} anomalies` : "")} style={{ fontSize: 10, fill: "hsl(var(--destructive))" }} />
                   </Bar>
                   <Line yAxisId="r" dataKey="momChange" stroke="hsl(var(--chart-3))" name="MoM change %" />
-                  {anomalyMarks.length > 0 && <Scatter yAxisId="l" data={anomalyMarks} dataKey="anomaly" fill="hsl(var(--destructive))" name="Anomaly" />}
                 </ComposedChart>
               </ResponsiveContainer>
               {data.partialMonth && (
@@ -161,7 +164,7 @@ function SalesPage() {
           <CardContent>
             {countryRows.length === 0 ? <Empty /> : (
               <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={countryRows} layout="vertical">
+                <BarChart data={countryRows} layout="vertical" margin={{ top: 4, right: 48, bottom: 4, left: 4 }}>
                   <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                   <XAxis type="number" tick={{ fontSize: 11 }} />
                   <YAxis type="category" dataKey="country" tick={{ fontSize: 11 }} width={110} />
@@ -184,12 +187,19 @@ function SalesPage() {
       </div>
 
       <Card>
-        <CardHeader><CardTitle>Anomalies</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle>Anomalies</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            A trading day is flagged only when it is both unusual and material: |z| above 3 and a deviation of at least £500
+            from the rolling 28-day expectation. November and December days are labelled Peak season rather than treated as
+            a warning, because the data cannot separate seasonal demand from a real problem.
+          </p>
+        </CardHeader>
         <CardContent>
           {anoms.length === 0 ? <Empty /> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-left text-muted-foreground"><tr>{["Store", "Category", "Date", "Expected", "Actual", "z", "Direction"].map((c) => <th key={c} className="pb-2 pr-4 font-medium">{c}</th>)}</tr></thead>
+                <thead className="text-left text-muted-foreground"><tr>{["Store", "Category", "Date", "Expected", "Actual", "z", "Direction", "Season"].map((c) => <th key={c} className="pb-2 pr-4 font-medium">{c}</th>)}</tr></thead>
                 <tbody>
                   {anoms.map((a, i) => (
                     <tr key={i} className="border-t border-border">
@@ -200,6 +210,7 @@ function SalesPage() {
                       <td className="py-2 pr-4">{fmtGbp(a.actual)}</td>
                       <td className="py-2 pr-4">{a.z_score}</td>
                       <td className="py-2 pr-4"><span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${a.direction === "high" ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>{a.direction}</span></td>
+                      <td className="py-2 pr-4">{isPeakSeason(a.date) ? <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">Peak season</span> : <span className="text-muted-foreground">—</span>}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -241,5 +252,7 @@ function Heatmap({ data }) {
   );
 }
 
+// Nov and Dec trading days are peak season in this dataset; a spike there is not a defect.
+function isPeakSeason(date) { const m = Number(String(date).slice(5, 7)); return m === 11 || m === 12; }
 function fmtGbp(v) { return v == null ? "—" : Number(v).toLocaleString("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 0 }); }
 function Empty() { return <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">No data for the selected filters.</div>; }

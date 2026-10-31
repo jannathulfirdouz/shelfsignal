@@ -9,7 +9,18 @@ const TYPE_LABEL = { reorder: "Reorder", markdown: "Markdown", investigate: "Inv
 const CONF = { high: "bg-emerald-50 text-emerald-700", medium: "bg-amber-50 text-amber-700", low: "bg-muted text-muted-foreground" };
 const STATUS = { new: "bg-sky-50 text-sky-700", accepted: "bg-emerald-50 text-emerald-700", rejected: "bg-rose-50 text-rose-700" };
 
-export function RecommendationCard({ rec, canDecide, onDecide, busy }) {
+const CONF_RULE = "Confidence: high when backtest WAPE is under 25%, medium between 25% and 45%, low above 45% or when the series has no forecast. A trust score under 90% drops it one level.";
+
+// One definition per recommendation type, shown on the card so the number is never
+// read as revenue that has already been earned.
+const IMPACT_RULE = {
+  reorder: "Expected impact = shortfall units (reorder point minus on-hand and on-order units, floored at zero) × unit price.",
+  markdown: "Expected impact = on-hand units at risk of write-off × unit cost.",
+  investigate: "Expected impact = absolute difference between actual and expected revenue on the flagged days, summed.",
+  re_engage: "Expected impact = the customer's historic monetary value (quantity × unit price across all orders).",
+};
+
+export function RecommendationCard({ rec, canDecide, canExplain = true, onDecide, busy }) {
   const explain = useServerFn(explainRecommendation);
   const [note, setNote] = useState("");
   const [showNote, setShowNote] = useState(false);
@@ -33,18 +44,19 @@ export function RecommendationCard({ rec, canDecide, onDecide, busy }) {
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-secondary-foreground">{TYPE_LABEL[rec.type] || rec.type}</span>
-              <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${CONF[rec.confidence] || CONF.low}`}>{rec.confidence} confidence</span>
+              <span title={CONF_RULE} className={`cursor-help rounded-full px-2 py-0.5 text-[11px] font-medium ${CONF[rec.confidence] || CONF.low}`}>{rec.confidence} confidence</span>
               <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${STATUS[rec.status] || STATUS.new}`}>{rec.status}</span>
             </div>
             <p className="mt-1.5 font-semibold">{rec.title}</p>
           </div>
           <div className="text-right">
             <p className="text-lg font-semibold">£{Number(rec.expected_impact_gbp || 0).toLocaleString("en-GB")}</p>
-            <p className="text-[11px] text-muted-foreground">expected impact · {rec.store_id}</p>
+            <p title={IMPACT_RULE[rec.type] || ""} className="cursor-help text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2">expected impact · {rec.store_id}</p>
           </div>
         </div>
 
         <p className="text-sm text-muted-foreground">{rec.reason}</p>
+        <p className="text-[11px] text-muted-foreground">{IMPACT_RULE[rec.type] || "No impact definition for this type."}</p>
 
         {explanation && (
           <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm">
@@ -55,9 +67,11 @@ export function RecommendationCard({ rec, canDecide, onDecide, busy }) {
         {err && <p className="text-sm text-destructive">{err}</p>}
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="outline" onClick={explainWithAI} disabled={explaining}>
-            {explaining ? "Explaining…" : explanation ? "Regenerate explanation" : "Explain with AI"}
-          </Button>
+          {canExplain && (
+            <Button size="sm" variant="outline" onClick={explainWithAI} disabled={explaining}>
+              {explaining ? "Explaining…" : explanation ? "Regenerate explanation" : "Explain with AI"}
+            </Button>
+          )}
           {canDecide && !decided && (
             <>
               <Button size="sm" onClick={() => (showNote ? decide("accepted") : setShowNote(true))} disabled={busy}>Accept</Button>

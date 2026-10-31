@@ -5,10 +5,12 @@ import { useAuth } from "@/lib/AuthContext";
 import { listUsersForAdmin, setRoleAndStore } from "@/lib/server-fns";
 import { base44 } from "@/api/base44Client";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { requireSignedIn } from "@/components/auth/AuthGate";
 import { Loader2, Lock, ShieldCheck } from "lucide-react";
 
 export const Route = createFileRoute("/_authed/admin")({
   ssr: false,
+  beforeLoad: requireSignedIn,
   head: () => ({ meta: [{ title: "Admin · ShelfSignal" }] }),
   component: AdminPage,
 });

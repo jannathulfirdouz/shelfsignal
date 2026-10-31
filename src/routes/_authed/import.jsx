@@ -1,10 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useAuth } from "@/lib/AuthContext";
 import { ImportFlow } from "@/components/ImportFlow";
+import { requireSignedIn } from "@/components/auth/AuthGate";
 import { Lock } from "lucide-react";
 
 export const Route = createFileRoute("/_authed/import")({
   ssr: false,
+  beforeLoad: requireSignedIn,
   head: () => ({ meta: [{ title: "Import data · ShelfSignal" }] }),
   component: ImportPage,
 });

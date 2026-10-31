@@ -85,7 +85,7 @@ function DataQualityPage() {
         </CardContent>
       </Card>
 
-      {!canAct && <p className="text-sm text-muted-foreground">Read-only: only owners and analysts can run checks or change issue status.</p>}
+      {!canAct && <p className="text-sm text-muted-foreground">Read-only: this view cannot run checks or change issue status. Sign in as an owner or analyst to do that.</p>}
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card>

@@ -53,7 +53,7 @@ export function RoleSwitcher({ onApplied }) {
     <div className="rounded-lg border border-sidebar-border bg-sidebar-accent/40 p-3">
       <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-sidebar-foreground/70">
         <UserRoundCog className="h-3.5 w-3.5" />
-        Demo role switcher
+        Owner test mode · your role
       </div>
       <select value={role} onChange={(e) => setRoleState(e.target.value)} className={selectCls}>
         {ROLES.map((r) => (

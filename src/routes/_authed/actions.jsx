@@ -2,8 +2,10 @@ import { useMemo, useState } from "react";
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { getRecommendations, decideRecommendation } from "@/lib/recommendations-fns";
+import { useAuth } from "@/lib/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { RecommendationCard } from "@/components/actions/RecommendationCard";
 
 export const Route = createFileRoute("/_authed/actions")({
@@ -21,15 +23,21 @@ const STATUS_OPTS = [["", "All status"], ["new", "New"], ["accepted", "Accepted"
 function ActionsPage() {
   const data = Route.useLoaderData();
   const router = useRouter();
+  const { user } = useAuth();
   const decide = useServerFn(decideRecommendation);
+  const [showClassC, setShowClassC] = useState(false);
   const [f, setF] = useState({ store: "", type: "", confidence: "", status: "" });
   const [busy, setBusy] = useState(null);
   const [err, setErr] = useState(null);
 
   const stores = useMemo(() => [...new Set(data.recommendations.map((r) => r.store_id))].sort(), [data.recommendations]);
-  const filtered = useMemo(() => data.recommendations.filter((r) =>
+  const matching = useMemo(() => data.recommendations.filter((r) =>
     (!f.store || r.store_id === f.store) && (!f.type || r.type === f.type) && (!f.confidence || r.confidence === f.confidence) && (!f.status || r.status === f.status)
   ), [data.recommendations, f]);
+  // Reorders are prioritised to ABC class A and B products; class C reorders are
+  // low value and stay hidden behind a toggle so they do not crowd the list.
+  const classC = useMemo(() => matching.filter((r) => isClassCReorder(r)), [matching]);
+  const filtered = useMemo(() => (showClassC ? matching : matching.filter((r) => !isClassCReorder(r))), [matching, showClassC]);
 
   const onDecide = async (id, status, note) => {
     setBusy(id); setErr(null);
@@ -53,8 +61,15 @@ function ActionsPage() {
         <Sel label="Type" value={f.type} onChange={(v) => setF({ ...f, type: v })} options={TYPE_OPTS} />
         <Sel label="Confidence" value={f.confidence} onChange={(v) => setF({ ...f, confidence: v })} options={CONF_OPTS} />
         <Sel label="Status" value={f.status} onChange={(v) => setF({ ...f, status: v })} options={STATUS_OPTS} />
+        <Button size="sm" variant={showClassC ? "default" : "outline"} onClick={() => setShowClassC((v) => !v)}>
+          {showClassC ? "Hide class C reorders" : `Show ${classC.length} class C reorder${classC.length === 1 ? "" : "s"}`}
+        </Button>
         <span className="pb-2 text-xs text-muted-foreground">{filtered.length} recommendation{filtered.length === 1 ? "" : "s"}{data.role === "store_manager" ? " · your store only" : ""}</span>
       </div>
+
+      <p className="text-xs text-muted-foreground">
+        Reorders are prioritised to ABC class A and B products. Class C reorders are low value and hidden unless you ask for them.
+      </p>
 
       {err && <p className="text-sm text-destructive">{err}</p>}
 
@@ -67,13 +82,20 @@ function ActionsPage() {
           <section key={g.type} className="space-y-3">
             <h2 className="text-lg font-semibold">{g.label} <span className="text-sm font-normal text-muted-foreground">({g.items.length})</span></h2>
             <div className="grid gap-3 lg:grid-cols-2">
-              {g.items.map((r) => <RecommendationCard key={r.id} rec={r} canDecide={data.canDecide} onDecide={onDecide} busy={busy === r.id} />)}
+              {g.items.map((r) => <RecommendationCard key={r.id} rec={r} canDecide={data.canDecide} canExplain={Boolean(user)} onDecide={onDecide} busy={busy === r.id} />)}
             </div>
           </section>
         ))
       )}
     </div>
   );
+}
+
+// A reorder for a product that is not ABC class A or B (unclassified counts as low value).
+function isClassCReorder(r) {
+  if (r.type !== "reorder") return false;
+  const abc = r.metrics?.abc_class;
+  return abc !== "A" && abc !== "B";
 }
 
 function Sel({ label, value, onChange, options }) {

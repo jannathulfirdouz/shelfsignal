@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { Lightbulb } from "lucide-react";
 
-export const Route = createFileRoute("/_authed/")({
+export const Route = createFileRoute("/_authed/home")({
   ssr: false,
   validateSearch: (s) => ({
     store: typeof s.store === "string" ? s.store : undefined,

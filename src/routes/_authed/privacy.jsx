@@ -7,10 +7,12 @@ import { PageHeader } from "@/components/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { requireSignedIn } from "@/components/auth/AuthGate";
 import { ShieldCheck, Eye, Check } from "lucide-react";
 
 export const Route = createFileRoute("/_authed/privacy")({
   ssr: false,
+  beforeLoad: requireSignedIn,
   loader: () => getPrivacySetting({ data: {} }),
   head: () => ({ meta: [{ title: "Privacy · ShelfSignal" }] }),
   component: PrivacyPage,

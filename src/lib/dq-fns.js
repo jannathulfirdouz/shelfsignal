@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { requireUser } from "@/lib/auth-middleware";
+import { requireUser, allowAnonymous } from "@/lib/auth-middleware";
 import { storeScope } from "@/lib/store-scope.server";
 import { SEED_RULES, scoreFromRules, evalChunk } from "@/lib/dq-rules.server";
 
@@ -55,7 +55,7 @@ async function readSalesWindow(b, user, cursor, chunkSize, fields) {
 
 // ---- Header trust summary (latest checked sales batch) -----------------------
 export const getTrustSummary = createServerFn({ method: "GET" })
-  .middleware([requireUser])
+  .middleware([allowAnonymous])
   .handler(async ({ context }) => {
     const b = context.getBase44();
     const page = await b.entities.DataBatch.filter(
@@ -73,7 +73,7 @@ export const getTrustSummary = createServerFn({ method: "GET" })
 
 // ---- Total row count for the progress bar -----------------------------------
 export const getDqTotal = createServerFn({ method: "GET" })
-  .middleware([requireUser])
+  .middleware([allowAnonymous])
   .handler(async ({ context }) => {
     const b = context.getBase44();
     return b.entities.SalesTransaction.count(storeScope(context.user));
@@ -260,7 +260,7 @@ export const finalizeChecks = createServerFn({ method: "POST" })
 
 // ---- Read results -----------------------------------------------------------
 export const getQualityData = createServerFn({ method: "GET" })
-  .middleware([requireUser])
+  .middleware([allowAnonymous])
   .validator(z.object({ batchId: z.string().max(100).optional() }))
   .handler(async ({ data, context }) => {
     const b = context.getBase44();
@@ -301,7 +301,7 @@ export const setIssueStatus = createServerFn({ method: "POST" })
 // ---- Column profiling (aggregate calls; never loads rows) -------------------
 const PROFILE_COLS = ["invoice_no", "sku", "qty", "unit_price", "customer_ref", "date"];
 export const getColumnProfile = createServerFn({ method: "GET" })
-  .middleware([requireUser])
+  .middleware([allowAnonymous])
   .handler(async ({ context }) => {
     const b = context.getBase44();
     const scope = storeScope(context.user);

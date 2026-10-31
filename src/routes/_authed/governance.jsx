@@ -34,24 +34,33 @@ function GovernancePage() {
   const data = Route.useLoaderData();
   const { user } = useAuth();
   const role = user?.app_role || user?.data?.app_role || "viewer";
-  if (role !== "owner" && role !== "analyst") {
+  // The public demo reads the dictionary, metrics and lineage; the audit log and the
+  // edit controls stay with signed-in owners and analysts.
+  const demo = Boolean(data.demo);
+  if (!demo && role !== "owner" && role !== "analyst") {
     return <Card><CardContent className="p-8 text-center text-muted-foreground">You do not have access to governance.</CardContent></Card>;
   }
   return (
     <div className="space-y-6">
       <PageHeader title="Governance" subtitle="Data dictionary, metric definitions, lineage and audit." />
+      {demo && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          Public demo · read-only. The data dictionary, metric definitions and lineage are open. The audit log, and editing
+          definitions, need a signed-in owner or analyst account.
+        </div>
+      )}
       {data.seed?.created ? <p className="text-xs text-muted-foreground">Seeded {data.seed.created} new dictionary entries.</p> : null}
       <Tabs defaultValue="dictionary">
         <TabsList>
           <TabsTrigger value="dictionary">Data dictionary</TabsTrigger>
           <TabsTrigger value="metrics">Metric definitions</TabsTrigger>
           <TabsTrigger value="lineage">Lineage</TabsTrigger>
-          <TabsTrigger value="audit">Audit log</TabsTrigger>
+          {!demo && <TabsTrigger value="audit">Audit log</TabsTrigger>}
         </TabsList>
         <TabsContent value="dictionary"><DictionaryTab rows={data.dictionary} role={role} /></TabsContent>
         <TabsContent value="metrics"><MetricsTab metrics={data.metrics} /></TabsContent>
         <TabsContent value="lineage"><LineageTab /></TabsContent>
-        <TabsContent value="audit"><AuditTab rows={data.auditLog} /></TabsContent>
+        {!demo && <TabsContent value="audit"><AuditTab rows={data.auditLog} /></TabsContent>}
       </Tabs>
     </div>
   );

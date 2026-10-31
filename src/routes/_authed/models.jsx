@@ -11,9 +11,12 @@ import {
   prepareAnomaly, runAnomalyStore,
 } from "@/lib/ml-fns";
 import { prepareRecommendations, generateRecommendations } from "@/lib/recommendations-fns";
+import { requireSignedIn } from "@/components/auth/AuthGate";
 
 export const Route = createFileRoute("/_authed/models")({
   ssr: false,
+  // Running models writes records, so this page needs a signed-in owner or analyst.
+  beforeLoad: requireSignedIn,
   loader: () => getModelsStatus({ data: {} }),
   head: () => ({ meta: [{ title: "Models · ShelfSignal" }] }),
   component: ModelsPage,
@@ -69,16 +72,18 @@ function ModelsPage() {
     const runId = "fc_" + Date.now();
     const slices = Math.ceil(series.length / CHUNK);
     let writes = 0, wapeSum = 0, seriesCount = 0;
+    const skipped = [];
     for (let i = 0; i < slices; i++) {
       const slice = series.slice(i * CHUNK, (i + 1) * CHUNK);
       const r = await withRetry(() => fChunk({ data: { series: slice, sliceIndex: i, totalSlices: slices, totalSeries: series.length, runId } }), wait);
       writes += r.writes || 0;
       wapeSum += r.wapeSum || 0;
       seriesCount += r.seriesCount || 0;
+      if (r.skips) skipped.push(...r.skips);
       onProgress({ done: i + 1, total: slices, waiting: false });
       if (r.stopped) throw new Error(r.error || "Stopped");
     }
-    await fFinal({ data: { runId, avgWape: seriesCount ? wapeSum / seriesCount : 0, seriesCount, writes } });
+    await fFinal({ data: { runId, avgWape: seriesCount ? wapeSum / seriesCount : 0, seriesCount, writes, seriesTotal: series.length, skipped } });
     refresh();
     return { writes };
   };
@@ -143,10 +148,10 @@ function ModelsPage() {
     <div className="space-y-6">
       <PageHeader title="Models" subtitle="Run demand forecasts, segmentation, ABC-XYZ and anomaly detection. Owners and analysts only." />
       <div className="grid gap-6 lg:grid-cols-2">
-        <RunCard title="Demand forecasting" description="Naive, 4-week MA, exponential smoothing and Holt's trend per store × category and top-20 SKUs. 8-week forecast with 80% band." lastRun={status.forecast} prepare={() => withRetry(() => fPrepare({ data: {} }))} run={forecastRun} disabled={lock("forecast")} onBusyChange={busyFor("forecast")} />
+        <RunCard title="Demand forecasting" description="Five models per store × category and top-20 SKUs: naive, 4-week moving average, exponential smoothing, Holt's trend and damped Holt. The winner is chosen on backtest WAPE and bias, then an 8-week forecast is produced with an 80% band. Series with fewer than 16 complete weeks are skipped and listed on the Forecasting page." lastRun={status.forecast} prepare={() => withRetry(() => fPrepare({ data: {} }))} run={forecastRun} disabled={lock("forecast")} onBusyChange={busyFor("forecast")} />
         <RunCard title="Customer segmentation" description="RFM k-means (k = 4): Champions, Loyal, At risk, Lost. Reads non-quarantined sales." lastRun={status.segmentation} prepare={() => withRetry(() => sPrepare({ data: {} }))} run={(p) => segmentRun(p, false)} forceRun={(p) => segmentRun(p, true)} disabled={lock("segmentation")} onBusyChange={busyFor("segmentation")} />
         <RunCard title="ABC-XYZ classification" description="ABC by cumulative revenue share, XYZ by coefficient of variation of weekly units. Per store × SKU." lastRun={status.abcxyz} prepare={() => withRetry(() => aPrepare({ data: {} }))} run={abcRun} disabled={lock("abcxyz")} onBusyChange={busyFor("abcxyz")} />
-        <RunCard title="Anomaly detection" description="Daily net revenue per store × category, rolling 28-trading-day stats, |z| > 3 flagged." lastRun={status.anomaly} prepare={() => withRetry(() => nPrepare({ data: {} }))} run={anomalyRun} disabled={lock("anomaly")} onBusyChange={busyFor("anomaly")} />
+        <RunCard title="Anomaly detection" description="Daily net revenue per store × category against a rolling 28-trading-day baseline. A day is flagged only if |z| is above 3 and the deviation is at least £500, so small categories do not fill the list with trivia. November and December days are labelled peak season." lastRun={status.anomaly} prepare={() => withRetry(() => nPrepare({ data: {} }))} run={anomalyRun} disabled={lock("anomaly")} onBusyChange={busyFor("anomaly")} />
         <RunCard title="Action recommendations" description="Reorder, markdown, investigate and re-engage actions from inventory, forecasts and segments. Regenerates only changed items." lastRun={status.recommendations} prepare={() => withRetry(() => recPrepare({ data: {} }))} run={recRun} disabled={lock("recommendations")} onBusyChange={busyFor("recommendations")} />
       </div>
     </div>
