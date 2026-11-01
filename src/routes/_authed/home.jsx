@@ -8,6 +8,7 @@ import { PageFilters } from "@/components/PageFilters";
 import { KpiCard } from "@/components/KpiCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { Lightbulb } from "lucide-react";
 
@@ -18,21 +19,23 @@ export const Route = createFileRoute("/_authed/home")({
     category: typeof s.category === "string" ? s.category : undefined,
     range: ["4w", "12w", "ytd", "all"].includes(s.range) ? s.range : undefined,
   }),
-  loaderDeps: ({ search }) => ({ store: search.store, category: search.category, range: search.range }),
-  loader: ({ deps }) => getHomeData({ data: deps }),
   head: () => ({ meta: [{ title: "Home · ShelfSignal" }] }),
   component: HomePage,
 });
 
 function HomePage() {
-  const data = Route.useLoaderData();
   const navigate = useNavigate();
+  const fetchHome = useServerFn(getHomeData);
   const getMetrics = useServerFn(getMetricDefinitions);
   const { user } = useAuth();
   const role = user?.app_role || user?.data?.app_role || "viewer";
   const lockStore = role === "store_manager";
   const [metricMap, setMetricMap] = useState({});
   const [includeOutliers, setIncludeOutliers] = useState(false);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+  const [attempt, setAttempt] = useState(0);
 
   const search = Route.useSearch();
   const filters = { store: search.store, category: search.category, range: search.range || "all" };
@@ -41,6 +44,60 @@ function HomePage() {
   useEffect(() => {
     getMetrics({ data: {} }).then((ms) => { const m = {}; for (const x of ms) m[x.name] = x; setMetricMap(m); }).catch(() => {});
   }, [getMetrics]);
+
+  // One automatic retry, so a slow first query recovers without the visitor
+  // pressing anything. A loading state shows until the answer is in.
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    setErr(null);
+    (async () => {
+      try {
+        let res;
+        try {
+          res = await fetchHome({ data: filters });
+        } catch {
+          await new Promise((r) => setTimeout(r, 800));
+          res = await fetchHome({ data: filters });
+        }
+        if (alive) setData(res);
+      } catch (e) {
+        if (alive) setErr(e?.data?.message || e?.message || "Could not load Home.");
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.store, filters.category, filters.range, attempt, fetchHome]);
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="Home" subtitle="Retail performance overview. All figures in GBP (£)." />
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {[0, 1, 2, 3, 4, 5, 6].map((i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
+        </div>
+        <Skeleton className="h-72 rounded-xl" />
+        <p className="text-sm text-muted-foreground">Loading the latest figures…</p>
+      </div>
+    );
+  }
+
+  if (err || !data) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="Home" subtitle="Retail performance overview. All figures in GBP (£)." />
+        <Card>
+          <CardContent className="p-8 text-center">
+            <p className="text-sm text-muted-foreground">The figures took too long to load.</p>
+            {err && <p className="mt-1 text-xs text-destructive">{err}</p>}
+            <Button className="mt-4" onClick={() => setAttempt((n) => n + 1)}>Try again</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   const k = data.kpis;
   const p = data.prevKpis;

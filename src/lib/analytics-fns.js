@@ -148,27 +148,66 @@ export const getHomeData = createServerFn({ method: "GET" })
     const b = context.getBase44();
     const scope = storeScope(context.user);
     const f = { store: data.store, category: data.category };
+    const range = data.range || "all";
     const maxDate = await maxWeekStart(b, scope);
-    const { from, to } = rangeToDates(data.range, maxDate);
+    const { from, to } = rangeToDates(range, maxDate);
 
-    const sums = await sumWeekly(b, weeklyQuery(scope, f, from, to));
-    const curOrders = await orderCount(b, scope, f, from, to);
-    const products = await loadProductsMap(b);
-    const out = await outlierContribs(b, products, scope, f, from, to);
-    const curRR = returnRatePair(sums, out);
-    const netRevenue = await netRevenueTotal(b, scope, { ...f, from, to });
+    // The unfiltered public view reads the one KPI record written by "Refresh
+    // summaries" instead of scanning transactions. Any filter uses the live path.
+    const useSummary = !f.store && !f.category && range === "all" && Object.keys(scope).length === 0;
+    let kpis = null;
+    let prevKpis = null;
 
-    let prev = null;
-    if (from && to) {
-      const len = daysBetween(from, to) + 1;
-      const pFrom = addDays(from, -len);
-      const pTo = addDays(from, -1);
-      const prevSums = await sumWeekly(b, weeklyQuery(scope, f, pFrom, pTo));
-      const prevOrders = await orderCount(b, scope, f, pFrom, pTo);
-      const prevOut = await outlierContribs(b, products, scope, f, pFrom, pTo);
-      const prevRR = returnRatePair(prevSums, prevOut);
-      const prevNet = await netRevenueTotal(b, scope, { ...f, from: pFrom, to: pTo });
-      prev = { net_revenue: prevNet, units: prevSums.units, cost: prevSums.cost, gross_revenue: prevSums.gross_revenue, returns_value: prevSums.returns_value, orders: prevOrders, returnRate: prevRR };
+    if (useSummary) {
+      const p = await b.entities.KpiSummary.filter({}, { sort: "-computed_at", limit: 1 });
+      const s = p.items?.[0];
+      if (s) {
+        kpis = {
+          netRevenue: r2(s.net_revenue),
+          grossMargin: s.gross_margin ?? null,
+          units: Math.round(Number(s.units) || 0),
+          orders: Number(s.orders) || 0,
+          aov: s.aov ?? null,
+          returnRate: { excl: s.return_rate_excl ?? null, incl: s.return_rate_incl ?? null },
+        };
+      }
+    }
+
+    if (!kpis) {
+      const sums = await sumWeekly(b, weeklyQuery(scope, f, from, to));
+      const curOrders = await orderCount(b, scope, f, from, to);
+      const products = await loadProductsMap(b);
+      const out = await outlierContribs(b, products, scope, f, from, to);
+      const curRR = returnRatePair(sums, out);
+      const netRevenue = await netRevenueTotal(b, scope, { ...f, from, to });
+
+      kpis = {
+        netRevenue: r2(netRevenue),
+        grossMargin: sums.net_revenue ? r2((sums.net_revenue - sums.cost) / sums.net_revenue * 100) : null,
+        units: Math.round(sums.units),
+        orders: curOrders,
+        aov: curOrders ? r2(netRevenue / curOrders) : null,
+        returnRate: curRR,
+      };
+
+      if (from && to) {
+        const len = daysBetween(from, to) + 1;
+        const pFrom = addDays(from, -len);
+        const pTo = addDays(from, -1);
+        const prevSums = await sumWeekly(b, weeklyQuery(scope, f, pFrom, pTo));
+        const prevOrders = await orderCount(b, scope, f, pFrom, pTo);
+        const prevOut = await outlierContribs(b, products, scope, f, pFrom, pTo);
+        const prevRR = returnRatePair(prevSums, prevOut);
+        const prevNet = await netRevenueTotal(b, scope, { ...f, from: pFrom, to: pTo });
+        prevKpis = {
+          netRevenue: r2(prevNet),
+          grossMargin: prevNet ? r2((prevNet - prevSums.cost) / prevNet * 100) : null,
+          units: Math.round(prevSums.units),
+          orders: prevOrders,
+          aov: prevOrders ? r2(prevNet / prevOrders) : null,
+          returnRate: prevRR,
+        };
+      }
     }
 
     const trendAgg = await b.entities.SalesWeeklySummary.aggregate({ query: weeklyQuery(scope, f, from, to), groupBy: "week_start", sum: ["net_revenue"] });
@@ -178,25 +217,8 @@ export const getHomeData = createServerFn({ method: "GET" })
     const revenueByStore = (storeAgg.rows ?? []).map((r) => ({ store: r.store_id, netRevenue: r2(Number(r.sum_net_revenue || 0)) })).sort((a, b2) => b2.netRevenue - a.netRevenue);
 
     const trust = await latestTrust(b);
+    kpis.trustScore = trust?.score ?? null;
     const filters = await filterOptions(b, context.user);
-
-    const kpis = {
-      netRevenue: r2(netRevenue),
-      grossMargin: sums.net_revenue ? r2((sums.net_revenue - sums.cost) / sums.net_revenue * 100) : null,
-      units: Math.round(sums.units),
-      orders: curOrders,
-      aov: curOrders ? r2(netRevenue / curOrders) : null,
-      returnRate: curRR,
-      trustScore: trust?.score ?? null,
-    };
-    const prevKpis = prev ? {
-      netRevenue: r2(prev.net_revenue),
-      grossMargin: prev.net_revenue ? r2((prev.net_revenue - prev.cost) / prev.net_revenue * 100) : null,
-      units: Math.round(prev.units),
-      orders: prev.orders,
-      aov: prev.orders ? r2(prev.net_revenue / prev.orders) : null,
-      returnRate: prev.returnRate,
-    } : null;
 
     const topActions = (await b.entities.Recommendation.filter({ ...scope, status: "new" }, { sort: "-expected_impact_gbp", limit: 5 })).items ?? [];
 

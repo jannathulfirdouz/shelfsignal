@@ -56,6 +56,7 @@ export const generateRecommendations = createServerFn({ method: "POST" })
     const now = new Date().toISOString();
     const runId = "rec_" + Date.now();
     const recs = [];
+    const exclusions = [];
 
     // Reference data.
     const products = new Map();
@@ -65,17 +66,26 @@ export const generateRecommendations = createServerFn({ method: "POST" })
     const pclass = new Map();
     for (const r of await readAll(b, "ProductClass", scope, ["store_id", "sku", "abc_class", "xyz_class"])) pclass.set(`${r.store_id}|${r.sku}`, r);
 
-    // Weekly units over the last 8 weeks (last 4 for demand, 8 for volatility).
+    // Weekly units over the last 12 weeks: the last 4 drive demand, the last 8
+    // volatility, and all 12 the net-units test that keeps outlier SKUs out.
     const weekly = new Map();
     const maxW = (await b.entities.SalesWeeklySummary.filter(scope, { sort: "-week_start", limit: 1, fields: ["week_start"] })).items?.[0]?.week_start;
     const seasonMonth = maxW ? Number(String(maxW).slice(5, 7)) : 0;
     const peakSeason = seasonMonth === 11 || seasonMonth === 12;
     if (maxW) {
-      const from = addDays(maxW, -55);
+      const from = addDays(maxW, -83);
       const rows = await readAll(b, "SalesWeeklySummary", { ...scope, week_start: { $gte: from } }, ["store_id", "sku", "week_start", "units"]);
       const tmp = new Map();
       for (const r of rows) { const k = `${r.store_id}|${r.sku}`; let m = tmp.get(k); if (!m) { m = new Map(); tmp.set(k, m); } m.set(r.week_start, num(r.units)); }
       for (const [k, m] of tmp) weekly.set(k, [...m.entries()].sort((a, c) => (a[0] < c[0] ? -1 : 1)).map(([, v]) => v));
+    }
+
+    // Units contributed by rows the "Quantity not an outlier" rule flags (absolute
+    // quantity over 10,000), per store × SKU. Only these few rows are read.
+    const outlierUnits = new Map();
+    {
+      const rows = await readAll(b, "SalesTransaction", { ...scope, is_quarantined: { $ne: true }, $or: [{ qty: { $gt: 10000 } }, { qty: { $lt: -10000 } }] }, ["store_id", "sku", "qty"]);
+      for (const r of rows) { const k = `${r.store_id}|${r.sku}`; outlierUnits.set(k, (outlierUnits.get(k) || 0) + Math.abs(num(r.qty))); }
     }
 
     // Latest forecast run (SKU series): weekly demand, WAPE, model, rising-trend flag.
@@ -116,6 +126,24 @@ export const generateRecommendations = createServerFn({ method: "POST" })
       const available = onHand + onOrder;
       const simulated = !!row.is_simulated;
       const pc = pclass.get(key);
+
+      // Skip SKUs with no net units in the last 12 weeks, or whose units are mostly
+      // one outlier quantity line — both would produce a false action.
+      const series = weekly.get(key) || [];
+      const net12 = series.reduce((a, c) => a + c, 0);
+      const abs12 = series.reduce((a, c) => a + Math.abs(c), 0);
+      const oUnits = outlierUnits.get(key) || 0;
+      const excluded = weekly.size === 0
+        ? null
+        : net12 <= 0
+          ? "no net units in the last 12 weeks"
+          : abs12 > 0 && oUnits / abs12 > 0.5
+            ? "more than half its units come from an outlier quantity order"
+            : null;
+      if (excluded) {
+        exclusions.push({ run_id: runId, store_id: row.store_id, sku: String(row.sku), reason: excluded, created_at: now });
+        continue;
+      }
 
       // Seasonal guard: when the window includes November/December peak trading, or the
       // series is flagged as a rising trend, the forecast over-states January demand, so
@@ -213,6 +241,13 @@ export const generateRecommendations = createServerFn({ method: "POST" })
       });
     }
 
+    // Remember what this run left out, so the Action centre can show the reason.
+    try {
+      const prev = await readAll(b, "RecommendationExclusion", scope, ["id"]);
+      if (prev.length) await b.entities.RecommendationExclusion.deleteMany({ id: { $in: prev.map((x) => x.id) } });
+      for (let i = 0; i < exclusions.length; i += 500) await b.entities.RecommendationExclusion.bulkCreate(exclusions.slice(i, i + 500));
+    } catch { /* the exclusion list is informational only */ }
+
     // Upsert: create new, update changed "new" ones only, never touch accepted/rejected.
     const existing = await readAll(b, "Recommendation", scope, ["type", "store_id", "sku", "category", "customer_ref", "title", "reason", "metrics", "confidence", "expected_impact_gbp", "status"]);
     const exByKey = new Map(existing.map((r) => [keyOf(r), r]));
@@ -236,7 +271,7 @@ export const generateRecommendations = createServerFn({ method: "POST" })
     } catch (e) { if (/daily entity write limit/i.test(e?.data?.message || e?.message || "")) { stopped = true; error = LIMIT; } else throw e; }
 
     await audit(b, user, { action: "generate_recommendations", entity: "Recommendation", record_ref: runId, detail: `${toCreate.length} new, ${toUpdate.length} updated, ${stale.length} removed, ${writes} writes` });
-    return { runId, writes, created: toCreate.length, updated: toUpdate.length, removed: stale.length, total: recs.length, stopped, error };
+    return { runId, writes, created: toCreate.length, updated: toUpdate.length, removed: stale.length, total: recs.length, excluded: exclusions.length, stopped, error };
   });
 
 export const getRecommendations = createServerFn({ method: "GET" })
@@ -246,8 +281,26 @@ export const getRecommendations = createServerFn({ method: "GET" })
     const scope = storeScope(context.user);
     const rows = await readAll(b, "Recommendation", scope, ["type", "store_id", "sku", "category", "customer_ref", "title", "reason", "metrics", "confidence", "expected_impact_gbp", "status", "decided_by", "decided_at", "decision_note", "generated_at", "run_id", "ai_explanation"]);
     rows.sort((a, b2) => num(b2.expected_impact_gbp) - num(a.expected_impact_gbp));
+
+    // ABC/XYZ class comes from ProductClass (per store × SKU). Rows written before
+    // ABC-XYZ had run carry no class, so it is resolved here on every read.
+    const skuRows = rows.filter((r) => r.sku && (r.type === "reorder" || r.type === "markdown"));
+    if (skuRows.length) {
+      const stores = [...new Set(skuRows.map((r) => r.store_id))];
+      const pcs = await readAll(b, "ProductClass", { ...scope, store_id: { $in: stores } }, ["store_id", "sku", "abc_class", "xyz_class"]);
+      const byKey = new Map(pcs.map((p) => [`${p.store_id}|${p.sku}`, p]));
+      for (const r of skuRows) {
+        const p = byKey.get(`${r.store_id}|${r.sku}`);
+        if (p) r.metrics = { ...(r.metrics || {}), abc_class: p.abc_class, xyz_class: p.xyz_class };
+      }
+    }
+
+    const exclusions = (await readAll(b, "RecommendationExclusion", scope, ["store_id", "sku", "reason"]))
+      .sort((a, b2) => (String(a.sku) < String(b2.sku) ? -1 : 1));
+
     return {
       recommendations: rows,
+      exclusions,
       canDecide: canDecide(context.user),
       role: roleOf(context.user),
       storeId: context.user?.store_id || context.user?.data?.store_id || "",

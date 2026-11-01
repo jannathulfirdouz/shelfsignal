@@ -1,0 +1,78 @@
+{
+  "name": "KpiSummary",
+  "type": "object",
+  "properties": {
+    "net_revenue": {
+      "type": "number"
+    },
+    "units": {
+      "type": "number"
+    },
+    "orders": {
+      "type": "number"
+    },
+    "aov": {
+      "type": "number"
+    },
+    "gross_margin": {
+      "type": "number"
+    },
+    "return_rate_incl": {
+      "type": "number"
+    },
+    "return_rate_excl": {
+      "type": "number"
+    },
+    "computed_at": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "computed_at"
+  ],
+  "rls": {
+    "read": {},
+    "create": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    }
+  }
+}

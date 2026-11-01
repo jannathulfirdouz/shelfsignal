@@ -21,7 +21,7 @@ const INSIDE = [
   ["Forecasting", "Weekly demand with backtest error and an 8-week forecast band"],
   ["Action centre", "Reorder, markdown, investigate and re-engage recommendations"],
   ["Data quality", "Rule-by-rule pass rates, quarantined rows and column profiles"],
-  ["Governance", "Data dictionary, metric definitions, KPI lineage and audit log"],
+  ["Governance", "Data dictionary, metric definitions and KPI lineage"],
 ];
 
 function LandingPage() {

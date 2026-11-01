@@ -71,6 +71,22 @@ function ActionsPage() {
         Reorders are prioritised to ABC class A and B products. Class C reorders are low value and hidden unless you ask for them.
       </p>
 
+      {data.exclusions?.length ? (
+        <details className="rounded-lg border border-border bg-muted/30 p-4 text-sm">
+          <summary className="cursor-pointer font-medium">Excluded from recommendations ({data.exclusions.length})</summary>
+          <p className="mt-1 text-xs text-muted-foreground">
+            These products were left out of the last run: no net units in the last 12 weeks, or most of their units come from one outlier quantity line.
+          </p>
+          <ul className="mt-2 max-h-56 space-y-1 overflow-auto text-muted-foreground">
+            {data.exclusions.map((x) => (
+              <li key={`${x.store_id}|${x.sku}`}>
+                <span className="font-medium text-foreground">{x.sku}</span> · {x.store_id} — {x.reason}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+
       {err && <p className="text-sm text-destructive">{err}</p>}
 
       {data.recommendations.length === 0 ? (

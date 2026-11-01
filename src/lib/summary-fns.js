@@ -166,10 +166,49 @@ export const finalizeHourly = createServerFn({ method: "POST" })
       if (toCreate.length) { await b.entities.SalesHourSummary.bulkCreate(toCreate); writes += toCreate.length; }
       if (toUpdate.length) { await b.entities.SalesHourSummary.bulkUpdate(toUpdate); writes += toUpdate.length; }
     } catch (e) { if (isLimit(e)) return { writes, stopped: true, error: limitMsg }; throw e; }
+
+    // Home KPI summary: one small record so Home reads it instead of scanning
+    // transactions. Built from the weekly summary (already refreshed) plus two
+    // cheap queries: distinct invoices and the outlier rows only.
+    let kpiError = null;
+    try {
+      const sums = await b.entities.SalesWeeklySummary.aggregate({ query: {}, sum: ["net_revenue", "units", "cost", "gross_revenue", "returns_value"] });
+      const sr = sums.rows?.[0] || {};
+      const net = Number(sr.sum_net_revenue || 0);
+      const cost = Number(sr.sum_cost || 0);
+      const grossRev = Number(sr.sum_gross_revenue || 0);
+      const returnsVal = Number(sr.sum_returns_value || 0);
+      const orderAgg = await b.entities.SalesTransaction.aggregate({ query: { is_quarantined: { $ne: true } }, countDistinct: "invoice_no" });
+      const orders = Number(orderAgg.rows?.[0]?.count_distinct_invoice_no || 0);
+      const outRows = await readAll(b, "SalesTransaction", { is_quarantined: { $ne: true }, $or: [{ qty: { $gt: 10000 } }, { qty: { $lt: -10000 } }] }, ["invoice_no", "qty", "unit_price"]);
+      let oReturns = 0;
+      let oGross = 0;
+      for (const r of outRows) {
+        const value = Math.abs(Number(r.qty) || 0) * (Number(r.unit_price) || 0);
+        if (String(r.invoice_no ?? "").toUpperCase().startsWith("C")) oReturns += value;
+        else oGross += value;
+      }
+      const adjGross = grossRev - oGross;
+      const record = {
+        net_revenue: r2(net),
+        units: Math.round(Number(sr.sum_units || 0)),
+        orders,
+        aov: orders ? r2(net / orders) : null,
+        gross_margin: net ? r2((net - cost) / net * 100) : null,
+        return_rate_incl: grossRev ? r2(returnsVal / grossRev * 100) : null,
+        return_rate_excl: adjGross ? r2((returnsVal - oReturns) / adjGross * 100) : null,
+        computed_at: new Date().toISOString(),
+      };
+      const found = await b.entities.KpiSummary.filter({}, { limit: 1 });
+      const ex = found.items?.[0];
+      if (ex) { await b.entities.KpiSummary.update(ex.id, record); writes += 1; }
+      else { await b.entities.KpiSummary.create(record); writes += 1; }
+    } catch (e) { kpiError = e?.data?.message || e?.message || "KPI summary not written"; }
+
     try {
       await b.entities.AuditLog.create({ user: user.email || user.id, role: roleOf(user), action: "refresh_summaries", entity: "SalesWeeklySummary", record_ref: "", timestamp: new Date().toISOString(), detail: `${writes} hourly rows written` });
     } catch { /* best-effort */ }
-    return { writes, stopped: false, error: null };
+    return { writes, stopped: false, error: null, kpiError };
   });
 
 // ---- When were summaries last refreshed? -----------------------------------
