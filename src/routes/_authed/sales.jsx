@@ -6,7 +6,7 @@ import { getAnomalies } from "@/lib/ml-fns";
 import { useAuth } from "@/lib/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
 import { PageFilters } from "@/components/PageFilters";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ComposedChart, Bar, Line, Cell, LabelList, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, BarChart } from "recharts";
 
@@ -59,7 +59,10 @@ function SalesPage() {
       />
 
       <Card>
-        <CardHeader><CardTitle>Monthly net revenue (MoM change %)</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle>Monthly net revenue (MoM change %)</CardTitle>
+          <CardDescription>The number above a bar counts the flagged trading days in that month.</CardDescription>
+        </CardHeader>
         <CardContent>
           {data.monthly.length === 0 ? <Empty /> : (
             <>
@@ -74,7 +77,7 @@ function SalesPage() {
                     {monthlyRows.map((m) => (
                       <Cell key={m.month} fill={m.month === data.partialMonth ? "hsl(var(--accent) / 0.4)" : "hsl(var(--accent))"} />
                     ))}
-                    <LabelList dataKey="anomalyCount" position="top" formatter={(v) => (v ? `${v} anomalies` : "")} style={{ fontSize: 10, fill: "hsl(var(--destructive))" }} />
+                    <LabelList dataKey="anomalyCount" position="top" offset={6} formatter={(v) => (v ? String(v) : "")} style={{ fontSize: 9, fill: "hsl(var(--destructive))" }} />
                   </Bar>
                   <Line yAxisId="r" dataKey="momChange" stroke="hsl(var(--chart-3))" name="MoM change %" />
                 </ComposedChart>

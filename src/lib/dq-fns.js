@@ -265,7 +265,10 @@ export const getQualityData = createServerFn({ method: "GET" })
   .handler(async ({ data, context }) => {
     const b = context.getBase44();
     const batches = (await b.entities.DataBatch.filter({ file_name: "sales_transactions.csv" }, { sort: "-created_date", limit: 20 })).items ?? [];
-    const batch = batches.find((x) => x.batch_id === data.batchId) ?? batches[0] ?? null;
+    // A failed or superseded import (the old 95,000-row upload) is not a sensible
+    // default, so the newest completed batch is selected unless one is asked for.
+    const completed = batches.filter((x) => x.status === "completed");
+    const batch = batches.find((x) => x.batch_id === data.batchId) ?? completed[0] ?? batches[0] ?? null;
     if (!batch) return { batches, batch: null, issues: [], dimensions: [] };
     const issues = (await b.entities.DataQualityIssue.filter({ batch_id: batch.batch_id }, { limit: 100 })).items ?? [];
     const dims = {};

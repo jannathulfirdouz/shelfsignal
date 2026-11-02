@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireUser, allowAnonymous } from "@/lib/auth-middleware";
 import { storeScope } from "@/lib/store-scope.server";
+import { roleLabelsForEmails } from "@/lib/roles.server";
 import { forecastSeries, segmentCustomers, abcXyz, detectAnomalies, pickWinner, FORECAST_MODELS, rfmRuleSegments } from "@/lib/ml.server";
 
 const roleOf = (u) => u?.app_role || u?.data?.app_role || "viewer";
@@ -239,9 +240,11 @@ export const getForecastData = createServerFn({ method: "GET" })
     const sumRows = await readAll(b, "SalesWeeklySummary", scope, ["store_id", "week_start", "category", "sku", "units", "net_revenue"]);
     const stores = [...new Set(sumRows.map((r) => r.store_id))].sort();
 
-    // Latest run + history (most recent first).
+    // Latest run + history (most recent first). Who ran it is shown as a role, never
+    // as an email address: this page is open to demo visitors.
     const runPage = await b.entities.ForecastRun.filter({}, { sort: "-created_at", limit: 12 });
-    const runs = (runPage.items ?? []).map((r) => ({ run_id: r.run_id, created_at: r.created_at, created_by: r.created_by, series_count: r.series_count ?? null, series_total: r.series_total ?? null, skipped_count: r.skipped_count ?? null, avg_wape: r.avg_wape ?? null }));
+    const roleBy = await roleLabelsForEmails(b, (runPage.items ?? []).map((r) => r.created_by));
+    const runs = (runPage.items ?? []).map((r) => ({ run_id: r.run_id, created_at: r.created_at, by: roleBy.get(r.created_by) || "—", series_count: r.series_count ?? null, series_total: r.series_total ?? null, skipped_count: r.skipped_count ?? null, avg_wape: r.avg_wape ?? null }));
     const runId = runs[0]?.run_id ?? null;
     const latest = runPage.items?.[0] ?? null;
     let skipped = [];
@@ -259,9 +262,13 @@ export const getForecastData = createServerFn({ method: "GET" })
     const storeRows = sumRows.filter((r) => r.store_id === data.storeId);
     const cats = new Set(); const skuRev = new Map();
     for (const r of storeRows) { if (r.category) cats.add(r.category); skuRev.set(r.sku, (skuRev.get(r.sku) || 0) + (Number(r.net_revenue) || 0)); }
+    // Product names sit next to the SKU codes in the series list.
+    const names = new Map();
+    for (const p of await readAll(b, "Product", {}, ["sku", "name"])) names.set(String(p.sku), p.name || "");
+    const skuLabel = (sku) => (names.get(String(sku)) ? `${sku} · ${names.get(String(sku))}` : String(sku));
     const series = [
       ...[...cats].sort().map((c) => ({ series_type: "category", series_key: c, label: c })),
-      ...[...skuRev.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20).map(([sku]) => ({ series_type: "sku", series_key: sku, label: sku })),
+      ...[...skuRev.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20).map(([sku]) => ({ series_type: "sku", series_key: sku, label: skuLabel(sku) })),
     ];
     // Latest-run forecasts for this store tell us which series have data; the rest
     // (fewer than 16 complete weeks) are listed but flagged "not enough data".
@@ -270,7 +277,7 @@ export const getForecastData = createServerFn({ method: "GET" })
     const seen = new Set(series.map((s) => `${s.series_type}|${s.series_key}`));
     for (const r of fkRows) {
       const k = `${r.series_type}|${r.series_key}`;
-      if (!seen.has(k)) { seen.add(k); series.push({ series_type: r.series_type, series_key: r.series_key, label: r.series_key }); }
+      if (!seen.has(k)) { seen.add(k); series.push({ series_type: r.series_type, series_key: r.series_key, label: r.series_type === "sku" ? skuLabel(r.series_key) : r.series_key }); }
     }
     for (const s of series) s.notEnough = !haveForecast.has(`${s.series_type}|${s.series_key}`);
     if (!data.seriesKey) return { ...empty, series };
@@ -292,7 +299,8 @@ export const getForecastData = createServerFn({ method: "GET" })
     const byModel = new Map();
     for (const r of fRows) if (!byModel.has(r.model)) byModel.set(r.model, { model: r.model, wape: r.wape, bias: r.bias });
     const { winner, reason } = pickWinner(Object.fromEntries(byModel));
-    const comparison = [...byModel.values()].map((m) => ({ ...m, isWinner: m.model === winner }));
+    // Lowest WAPE first, so the best model reads top to bottom.
+    const comparison = [...byModel.values()].map((m) => ({ ...m, isWinner: m.model === winner })).sort((a, b2) => (a.wape ?? 9) - (b2.wape ?? 9));
     const risingTrend = fRows.some((r) => r.flag === "Check: rising trend");
     return { stores, series, actuals, backtest, forecast, comparison, winner, selectionReason: reason, risingTrend, runs, runId, coverage };
   });
@@ -364,6 +372,8 @@ export const getSegmentData = createServerFn({ method: "GET" })
     const segRows = await readAll(b, "CustomerSegment", scope, ["customer_ref", "store_id", "recency_days", "frequency", "monetary", "segment"]);
     const customers = await readAll(b, "Customer", {}, ["customer_ref", "email", "country"]);
     const emailMap = new Map(customers.map((c) => [String(c.customer_ref), c.email]));
+    // Customer emails are owner-only; everyone else, demo visitors included, gets none.
+    const canSeeEmails = roleOf(context.user) === "owner";
     // summary
     const groups = {};
     for (const r of segRows) { (groups[r.segment] ??= { count: 0, monetary: 0, recency: 0, frequency: 0 }); const g = groups[r.segment]; g.count++; g.monetary += r.monetary; g.recency += r.recency_days; g.frequency += r.frequency; }
@@ -373,7 +383,7 @@ export const getSegmentData = createServerFn({ method: "GET" })
     const dominant = summary.reduce((a, s) => (s.count > (a ? a.count : 0) ? s : a), null);
     const dominantSharePct = dominant ? r2((dominant.count / totalSeg) * 100) : 0;
     const atRisk = (groups["At risk"]?.monetary || 0);
-    let list = segRows.map((r) => ({ customer_ref: r.customer_ref, store_id: r.store_id, segment: r.segment, recency: r.recency_days, frequency: r.frequency, monetary: r.monetary, email: emailMap.get(r.customer_ref) || null }));
+    let list = segRows.map((r) => ({ customer_ref: r.customer_ref, store_id: r.store_id, segment: r.segment, recency: r.recency_days, frequency: r.frequency, monetary: r.monetary, email: canSeeEmails ? emailMap.get(r.customer_ref) || null : null }));
     if (data.segment) list = list.filter((r) => r.segment === data.segment);
     list.sort((a, b) => b.monetary - a.monetary);
 

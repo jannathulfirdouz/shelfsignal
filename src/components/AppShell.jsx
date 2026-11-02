@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useRouter } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
+import { ensureViewerRole } from "@/lib/server-fns";
 import { LayoutDashboard, Upload, ShieldCheck, LogOut, Menu, X, LineChart, BadgeCheck, Home, BarChart3, Boxes, Scale, Lock, Users, TrendingUp, BrainCircuit, Lightbulb, Info } from "lucide-react";
 import { useAuth } from "@/lib/AuthContext";
 import { RoleSwitcher } from "@/components/RoleSwitcher";
@@ -50,6 +52,17 @@ export function AppShell({ children }) {
   const canImport = role === "owner" || role === "analyst";
   // No session once auth has resolved means the public, read-only demo visitor.
   const isDemo = !isLoadingAuth && !user;
+
+  // A newly created account arrives with no role: settle it as viewer once, so a
+  // sign-up from the login page can never reach a higher role.
+  const ensureRole = useServerFn(ensureViewerRole);
+  const missingRole = Boolean(user) && !user.app_role && !user.data?.app_role;
+  const roleSettled = useRef(false);
+  useEffect(() => {
+    if (!missingRole || roleSettled.current) return;
+    roleSettled.current = true;
+    ensureRole({ data: {} }).catch(() => { roleSettled.current = false; });
+  }, [missingRole, ensureRole]);
 
   return (
     <div className="min-h-screen bg-muted/30">

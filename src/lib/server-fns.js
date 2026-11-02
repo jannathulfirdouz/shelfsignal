@@ -292,6 +292,23 @@ export const setRoleAndStore = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+// A new account always starts as a viewer: read-only, and never shown customer
+// emails. Called once when a session arrives with no role set, so signing up from
+// the login page can never land anyone in a higher role.
+export const ensureViewerRole = createServerFn({ method: "POST" })
+  .middleware([requireUser])
+  .handler(async ({ context }) => {
+    const me = context.user;
+    const current = me?.app_role || me?.data?.app_role;
+    if (ROLES.includes(current)) return { role: current };
+    try {
+      await context.getBase44().asServiceRole.entities.User.update(me.id, { app_role: "viewer" });
+    } catch {
+      /* the profile read path still treats a missing role as viewer */
+    }
+    return { role: "viewer" };
+  });
+
 // ---- Admin: list users ------------------------------------------------------
 export const listUsersForAdmin = createServerFn({ method: "GET" })
   .middleware([requireUser])

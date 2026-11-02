@@ -31,11 +31,17 @@ function DataQualityPage() {
   const [busyId, setBusyId] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [summariesAt, setSummariesAt] = useState(null);
+  const [showAll, setShowAll] = useState(false);
 
   useEffect(() => { getSummary({ data: {} }).then(setSummariesAt).catch(() => {}); }, [refreshKey]);
   const role = user?.app_role || user?.data?.app_role || "viewer";
   const canAct = role === "owner" || role === "analyst";
   const batch = data.batch;
+  // Failed and superseded imports stay hidden unless the visitor asks for them.
+  const completed = data.batches.filter((b) => b.status === "completed");
+  const listed = showAll
+    ? data.batches
+    : batch && !completed.some((b) => b.batch_id === batch.batch_id) ? [batch, ...completed] : completed;
 
   const changeStatus = async (id, status) => {
     setBusyId(id);
@@ -68,13 +74,18 @@ function DataQualityPage() {
               value={batch?.batch_id ?? ""}
               onChange={(e) => navigate({ search: { batch: e.target.value } })}
             >
-              {data.batches.length === 0 && <option value="">No sales batches yet</option>}
-              {data.batches.map((b) => (
+              {listed.length === 0 && <option value="">No sales batches yet</option>}
+              {listed.map((b) => (
                 <option key={b.id} value={b.batch_id}>
                   {b.file_name} · {b.rows_passed?.toLocaleString("en-GB")} rows · {b.batch_id.slice(0, 8)}
+                  {b.status !== "completed" ? ` · ${b.status}` : ""}
                 </option>
               ))}
             </select>
+            <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+              <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
+              Show all batches (including failed and superseded)
+            </label>
           </div>
           {canAct && (
             <div className="flex w-full flex-col gap-3">

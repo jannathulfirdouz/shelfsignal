@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { LineChart, Compass, ShieldCheck, BookOpen } from "lucide-react";
+import { LineChart, Compass, ShieldCheck, BookOpen, Activity, AlertTriangle } from "lucide-react";
 
 export const Route = createFileRoute("/about")({
   head: () => ({
@@ -99,6 +99,64 @@ function AboutPage() {
               analyst account.
             </p>
             <Button variant="outline" size="sm" onClick={startTour}>Restart guided tour</Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader><CardTitle className="flex items-center gap-2"><Activity className="h-4 w-4 text-accent" />Models used</CardTitle></CardHeader>
+          <CardContent className="space-y-2 text-sm text-muted-foreground">
+            <p>
+              <span className="font-medium text-foreground">Demand forecasting.</span> Five weekly models compete on an
+              eight-week backtest: last value (naive), four-week moving average, simple exponential smoothing, Holt's
+              linear trend and damped Holt, whose trend flattens with the horizon. The winner is the lowest WAPE, with
+              bias reported beside it, and the forecast carries a band of ± 1.28 × backtest error σ × √(weeks ahead).
+            </p>
+            <p>
+              <span className="font-medium text-foreground">Customer segments.</span> K-means over winsorised recency,
+              frequency and monetary value, with clusters ranked by their centroids into Champions, Loyal, At risk and
+              Lost, then cross-checked against plain RFM quintiles so the result can be audited.
+            </p>
+            <p>
+              <span className="font-medium text-foreground">Product class.</span> ABC by cumulative revenue share and XYZ
+              by the coefficient of variation of weekly units, per store.
+            </p>
+            <p>
+              <span className="font-medium text-foreground">Anomalies.</span> A rolling 28-day expectation per store and
+              category; a trading day is flagged only when it is both unusual (|z| above 3) and material (at least £500
+              from expectation). November and December days are labelled Peak season rather than treated as a warning.
+            </p>
+            <p>
+              <span className="font-medium text-foreground">Recommendations.</span> Rules over inventory, forecast and
+              segment data, with the impact in pounds taken from the published metric definitions. Explanations quote
+              the stored numbers only and never generate figures of their own.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader><CardTitle className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-600" />Known limitations</CardTitle></CardHeader>
+          <CardContent className="space-y-2 text-sm text-muted-foreground">
+            <p>
+              One year of history means yearly seasonality cannot be learned. Forecasts beyond December 2011 will not
+              anticipate the January drop, and the Christmas peak is not built into any model.
+            </p>
+            <p>
+              A series needs 16 complete weeks to be forecast. Shorter series are listed as skipped with the reason,
+              rather than given a forecast built on thin history.
+            </p>
+            <p>
+              The file ends on 9 December 2011, so the final week and that month are partial and are shown separately
+              instead of being compared like-for-like.
+            </p>
+            <p>
+              Product cost, and therefore gross margin, is simulated. Inventory positions, lead times and days since
+              last sale are simulated too, and tagged wherever they appear.
+            </p>
+            <p>
+              Segment, class, forecast and recommendation results reflect their last run; re-running a model is what
+              refreshes them. Anomalies are detected per store and category, so a spike confined to a single product
+              may not surface.
+            </p>
           </CardContent>
         </Card>
 

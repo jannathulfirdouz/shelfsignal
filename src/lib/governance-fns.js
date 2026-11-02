@@ -103,7 +103,9 @@ export const getLineage = createServerFn({ method: "GET" })
   .middleware([allowAnonymous])
   .validator(z.object({ kpi: z.enum(["net_revenue", "gross_margin", "return_rate", "stock_cover"]) }))
   .handler(async ({ data, context }) => {
-    if (!canGovern(context.user)) throw forbid();
+    // Read-only lineage is open to demo visitors too: aggregate counts only, and
+    // never a user's details. A signed-in non-governance role is still refused.
+    if (context.user && !canGovern(context.user)) throw forbid();
     const b = context.getBase44();
     const scope = storeScope(context.user);
     const meta = KPI_MAP[data.kpi];

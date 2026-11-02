@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireUser, allowAnonymous } from "@/lib/auth-middleware";
 import { storeScope } from "@/lib/store-scope.server";
 import { readAll, withRate, audit } from "@/lib/ml-fns";
+import { roleLabelsForEmails } from "@/lib/roles.server";
 
 const roleOf = (u) => u?.app_role || u?.data?.app_role || "viewer";
 const canRun = (u) => ["owner", "analyst"].includes(roleOf(u));
@@ -26,6 +27,8 @@ function confidenceFor(wape, trust) {
   if (trust != null && trust < 90) level = level === "high" ? "medium" : "low";
   return level;
 }
+// A rising-trend check is a prompt to look, not a confident call, so it never rates high.
+const capMedium = (level) => (level === "high" ? "medium" : level);
 const keyOf = (r) => [r.type, r.store_id || "", r.sku || "", r.category || "", r.customer_ref || ""].join("|");
 
 async function latestTrustScore(b) {
@@ -224,7 +227,7 @@ export const generateRecommendations = createServerFn({ method: "POST" })
         title: `Check: rising trend — ${sku} in ${store_id}`,
         reason: `${sku} forecast averages ${r0(fc.weekly)} units per week over 8 weeks, ${r0(risePct)}% above the last 8 weeks of actuals (${r0(last8)} units). Check: rising trend.`,
         metrics: { weekly_forecast: r0(fc.weekly), last8_avg_units: r0(last8), rise_pct: r0(risePct), wape: num(fc.wape), model: fc.model, trust_score: trust },
-        confidence: confidenceFor(num(fc.wape), trust), expected_impact_gbp: r0(Math.abs(fc.weekly - last8) * price * 8),
+        confidence: capMedium(confidenceFor(num(fc.wape), trust)), expected_impact_gbp: r0(Math.abs(fc.weekly - last8) * price * 8),
       });
     }
 
@@ -280,6 +283,9 @@ export const getRecommendations = createServerFn({ method: "GET" })
     const b = context.getBase44();
     const scope = storeScope(context.user);
     const rows = await readAll(b, "Recommendation", scope, ["type", "store_id", "sku", "category", "customer_ref", "title", "reason", "metrics", "confidence", "expected_impact_gbp", "status", "decided_by", "decided_at", "decision_note", "generated_at", "run_id", "ai_explanation"]);
+    // A decision shows who by role, never by email address (demo visitors read this).
+    const decidedBy = await roleLabelsForEmails(b, rows.map((r) => r.decided_by));
+    for (const r of rows) if (r.decided_by) r.decided_by = decidedBy.get(r.decided_by) || "—";
     rows.sort((a, b2) => num(b2.expected_impact_gbp) - num(a.expected_impact_gbp));
 
     // ABC/XYZ class comes from ProductClass (per store × SKU). Rows written before

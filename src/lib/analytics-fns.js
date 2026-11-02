@@ -239,9 +239,17 @@ export const getSalesAnalytics = createServerFn({ method: "GET" })
 
     const wkAgg = await b.entities.SalesWeeklySummary.aggregate({ query: wq, groupBy: "week_start", sum: ["net_revenue"] });
     const byWeek = (wkAgg.rows ?? []).map((r) => ({ week: r.week_start, netRevenue: Number(r.sum_net_revenue || 0) })).sort((a, b2) => (a.week < b2.week ? -1 : 1));
-    const monthlyMap = {};
-    for (const w of byWeek) { const m = w.week.slice(0, 7); monthlyMap[m] = (monthlyMap[m] || 0) + w.netRevenue; }
-    const monthly = Object.entries(monthlyMap).map(([month, netRevenue]) => ({ month, netRevenue: r2(netRevenue) }));
+    // Each week is counted in the month that holds most of its days (its Thursday),
+    // so the week starting 29 Nov 2010 is December's first week rather than a
+    // separate November. Month-on-month change compares whole calendar months.
+    const monthlyMap = new Map();
+    for (const w of byWeek) {
+      const mid = new Date(w.week + "T00:00:00Z");
+      mid.setUTCDate(mid.getUTCDate() + 3);
+      const m = mid.toISOString().slice(0, 7);
+      monthlyMap.set(m, (monthlyMap.get(m) || 0) + w.netRevenue);
+    }
+    const monthly = [...monthlyMap.entries()].sort((a, b2) => (a[0] < b2[0] ? -1 : 1)).map(([month, netRevenue]) => ({ month, netRevenue: r2(netRevenue) }));
     for (let i = 0; i < monthly.length; i++) {
       const prev = monthly[i - 1];
       monthly[i].momChange = prev ? r2((monthly[i].netRevenue - prev.netRevenue) / (prev.netRevenue || 1) * 100) : null;

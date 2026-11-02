@@ -180,7 +180,7 @@ function ForecastingPage() {
                       <td className="py-2 pr-4">{r.created_at ? new Date(r.created_at).toLocaleString("en-GB", { timeZone: "UTC" }) : "—"}</td>
                       <td className="py-2 pr-4">{r.series_count ?? "—"}</td>
                       <td className="py-2 pr-4">{r.avg_wape != null ? `${(r.avg_wape * 100).toFixed(1)}%` : "—"}</td>
-                      <td className="py-2 pr-4">{r.created_by || "—"}</td>
+                      <td className="py-2 pr-4">{r.by || "—"}</td>
                     </tr>
                   ))}
                 </tbody>
