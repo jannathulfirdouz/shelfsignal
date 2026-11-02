@@ -2,11 +2,11 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth-middleware";
 import { storeScope } from "@/lib/store-scope.server";
+import { readAll, withRate, isDailyLimit, isRateLimit, retryAfterSec } from "@/lib/rate-limit";
 
 const roleOf = (u) => u?.app_role || u?.data?.app_role || "viewer";
 const canRun = (u) => ["owner", "analyst"].includes(roleOf(u));
 const forbid = () => Object.assign(new Error("Only owners and analysts can do this"), { status: 403 });
-const isLimit = (e) => e?.status === 429 || /daily entity write limit/i.test(e?.data?.message || e?.message || "");
 const limitMsg = "Stopped: the app's daily limit of 100,000 record writes was reached. Run again later to continue.";
 
 const r2 = (n) => Math.round((n || 0) * 100) / 100;
@@ -34,17 +34,6 @@ function parseDT(txn_datetime, date) {
   if (txn_datetime) { const d = new Date(String(txn_datetime).replace(" ", "T")); if (!isNaN(d)) return d; }
   if (date) return new Date(date + "T00:00:00Z");
   return new Date();
-}
-
-async function readAll(b, name, query, fields) {
-  const rows = [];
-  let cursor;
-  do {
-    const page = await b.entities[name].filter(query, { limit: 1000, cursor, fields });
-    rows.push(...(page.items ?? []));
-    cursor = page.has_more ? page.next_cursor : undefined;
-  } while (cursor);
-  return rows;
 }
 
 async function loadProductsFull(b) {
@@ -86,8 +75,19 @@ export const refreshWeek = createServerFn({ method: "POST" })
     const query = { ...scope, is_quarantined: { $ne: true }, date: { $gte: weekStart, $lt: weekEnd } };
     if (data.storeFilter) query.store_id = data.storeFilter;
 
-    const rows = await readAll(b, "SalesTransaction", query, ["invoice_no", "date", "txn_datetime", "store_id", "sku", "qty", "unit_price", "country"]);
-    const products = await loadProductsFull(b);
+    // An empty week result, used when the run has to pause: the browser retries the
+    // same week after waiting (a rate limit), or continues from it on the next click.
+    const bail = (extra) => ({ weekStart, weeklyWrites: 0, hourly: [], monthly: [], category: [], country: [], stopped: false, rateLimited: false, retryAfterSec: 0, error: null, ...extra });
+
+    let rows;
+    let products;
+    try {
+      rows = await readAll(b, "SalesTransaction", query, ["invoice_no", "date", "txn_datetime", "store_id", "sku", "qty", "unit_price", "country"]);
+      products = await loadProductsFull(b);
+    } catch (e) {
+      if (isRateLimit(e)) return bail({ rateLimited: true, retryAfterSec: retryAfterSec(e) });
+      throw e;
+    }
 
     const weekly = new Map();
     const hourly = new Map();
@@ -138,7 +138,13 @@ export const refreshWeek = createServerFn({ method: "POST" })
       h.orders.add(r.invoice_no);
     }
 
-    const existing = await readAll(b, "SalesWeeklySummary", { ...scope, week_start: weekStart, ...(data.storeFilter ? { store_id: data.storeFilter } : {}) }, ["id", "store_id", "sku", "category", "units", "gross_revenue", "returns_value", "net_revenue", "orders", "cost"]);
+    let existing;
+    try {
+      existing = await readAll(b, "SalesWeeklySummary", { ...scope, week_start: weekStart, ...(data.storeFilter ? { store_id: data.storeFilter } : {}) }, ["id", "store_id", "sku", "category", "units", "gross_revenue", "returns_value", "net_revenue", "orders", "cost"]);
+    } catch (e) {
+      if (isRateLimit(e)) return bail({ rateLimited: true, retryAfterSec: retryAfterSec(e) });
+      throw e;
+    }
     const exMap = new Map(existing.map((x) => [`${x.store_id}|${x.sku}|${x.category}`, x]));
     const toCreate = [];
     const toUpdate = [];
@@ -150,21 +156,24 @@ export const refreshWeek = createServerFn({ method: "POST" })
     }
 
     let writes = 0;
-    let stopped = false;
-    let error = null;
     try {
-      if (toCreate.length) { await b.entities.SalesWeeklySummary.bulkCreate(toCreate); writes += toCreate.length; }
-    } catch (e) { if (isLimit(e)) { stopped = true; error = limitMsg; } else throw e; }
-    if (!stopped && toUpdate.length) {
-      try { for (let i = 0; i < toUpdate.length && !stopped; i += 500) { const s = toUpdate.slice(i, i + 500); await b.entities.SalesWeeklySummary.bulkUpdate(s); writes += s.length; } }
-      catch (e) { if (isLimit(e)) { stopped = true; error = limitMsg; } else throw e; }
+      if (toCreate.length) { await withRate(() => b.entities.SalesWeeklySummary.bulkCreate(toCreate)); writes += toCreate.length; }
+      for (let i = 0; i < toUpdate.length; i += 500) {
+        const s = toUpdate.slice(i, i + 500);
+        await withRate(() => b.entities.SalesWeeklySummary.bulkUpdate(s));
+        writes += s.length;
+      }
+    } catch (e) {
+      if (isDailyLimit(e)) return bail({ weeklyWrites: writes, stopped: true, error: limitMsg });
+      if (isRateLimit(e)) return bail({ weeklyWrites: writes, rateLimited: true, retryAfterSec: retryAfterSec(e) });
+      throw e;
     }
 
     const hourlyArr = [...hourly.values()].map((h) => ({ store_id: h.store_id, weekday: h.weekday, hour: h.hour, net_revenue: r2(h.net_revenue), orders: h.orders.size }));
     const monthlyArr = [...monthly.entries()].map(([key, net]) => ({ key, net_revenue: r2(net) }));
     const categoryArr = [...cats.values()].map((c) => ({ ...c, net_revenue: r2(c.net_revenue), gross_revenue: r2(c.gross_revenue), returns_value: r2(c.returns_value), out_returns: r2(c.out_returns), out_gross: r2(c.out_gross) }));
     const countryArr = [...countries.entries()].map(([key, set]) => ({ key, orders: set.size }));
-    return { weekStart, weeklyWrites: writes, hourly: hourlyArr, monthly: monthlyArr, category: categoryArr, country: countryArr, stopped, error };
+    return { weekStart, weeklyWrites: writes, hourly: hourlyArr, monthly: monthlyArr, category: categoryArr, country: countryArr, stopped: false, rateLimited: false, retryAfterSec: 0, error: null };
   });
 
 // ---- Finalize hourly: diff the small (<=504) global table --------------------
@@ -181,7 +190,13 @@ export const finalizeHourly = createServerFn({ method: "POST" })
     const b = context.getBase44();
     const user = context.user;
     const scope = storeScope(user);
-    const existing = await readAll(b, "SalesHourSummary", scope, ["id", "store_id", "weekday", "hour", "net_revenue", "orders"]);
+    let existing;
+    try {
+      existing = await readAll(b, "SalesHourSummary", scope, ["id", "store_id", "weekday", "hour", "net_revenue", "orders"]);
+    } catch (e) {
+      if (isRateLimit(e)) return { writes: 0, stopped: false, rateLimited: true, retryAfterSec: retryAfterSec(e), error: null };
+      throw e;
+    }
     const exMap = new Map(existing.map((x) => [`${x.store_id}|${x.weekday}|${x.hour}`, x]));
     const toCreate = [];
     const toUpdate = [];
@@ -192,9 +207,21 @@ export const finalizeHourly = createServerFn({ method: "POST" })
     }
     let writes = 0;
     try {
-      if (toCreate.length) { await b.entities.SalesHourSummary.bulkCreate(toCreate); writes += toCreate.length; }
-      if (toUpdate.length) { await b.entities.SalesHourSummary.bulkUpdate(toUpdate); writes += toUpdate.length; }
-    } catch (e) { if (isLimit(e)) return { writes, stopped: true, error: limitMsg }; throw e; }
+      for (let i = 0; i < toCreate.length; i += 500) {
+        const s = toCreate.slice(i, i + 500);
+        await withRate(() => b.entities.SalesHourSummary.bulkCreate(s));
+        writes += s.length;
+      }
+      for (let i = 0; i < toUpdate.length; i += 500) {
+        const s = toUpdate.slice(i, i + 500);
+        await withRate(() => b.entities.SalesHourSummary.bulkUpdate(s));
+        writes += s.length;
+      }
+    } catch (e) {
+      if (isDailyLimit(e)) return { writes, stopped: true, rateLimited: false, retryAfterSec: 0, error: limitMsg };
+      if (isRateLimit(e)) return { writes, stopped: false, rateLimited: true, retryAfterSec: retryAfterSec(e), error: null };
+      throw e;
+    }
 
     // Sales page summary: monthly, category and country totals, written here so the
     // unfiltered Sales view reads these small records instead of scanning transactions.
@@ -264,7 +291,7 @@ export const finalizeHourly = createServerFn({ method: "POST" })
     try {
       await b.entities.AuditLog.create({ user: user.email || user.id, role: roleOf(user), action: "refresh_summaries", entity: "SalesWeeklySummary", record_ref: "", timestamp: new Date().toISOString(), detail: `${writes} hourly rows written` });
     } catch { /* best-effort */ }
-    return { writes, stopped: false, error: null, kpiError, salesError };
+    return { writes, stopped: false, rateLimited: false, retryAfterSec: 0, error: null, kpiError, salesError };
   });
 
 // ---- When were summaries last refreshed? -----------------------------------
