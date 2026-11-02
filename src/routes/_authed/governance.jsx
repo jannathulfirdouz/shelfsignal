@@ -45,8 +45,8 @@ function GovernancePage() {
       <PageHeader title="Governance" subtitle="Data dictionary, metric definitions, lineage and audit." />
       {demo && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          Public demo · read-only. The data dictionary, metric definitions and lineage are open. The audit log, and editing
-          definitions, need a signed-in owner or analyst account.
+          Read-only view. The data dictionary, metric definitions and lineage are open. The audit log, and editing
+          definitions, need an owner or analyst account.
         </div>
       )}
       {data.seed?.created ? <p className="text-xs text-muted-foreground">Seeded {data.seed.created} new dictionary entries.</p> : null}
@@ -220,7 +220,7 @@ function LineageTab() {
           </select>
         </div>
         {loading ? <p className="text-sm text-muted-foreground">Loading…</p> : data ? (
-          <div className="flex flex-wrap items-stretch gap-2">
+          <div className="flex flex-col items-stretch gap-1 md:flex-row md:flex-wrap md:gap-2">
             <Step title="Source" main={data.source ? data.source.file : "No batch"} sub={data.source ? `${data.source.rowsIn.toLocaleString("en-GB")} rows imported` : ""} />
             <Arrow />
             <Step title="Data quality" main={`${data.quarantined.toLocaleString("en-GB")} quarantined`} sub={`${data.used.toLocaleString("en-GB")} used`} tone="amber" />
@@ -268,7 +268,7 @@ function Step({ title, main, sub, tone }) {
     </div>
   );
 }
-function Arrow() { return <ArrowRight className="mt-8 h-4 w-4 shrink-0 text-muted-foreground" />; }
+function Arrow() { return <ArrowRight className="mx-auto h-4 w-4 shrink-0 rotate-90 text-muted-foreground md:mx-0 md:mt-8 md:rotate-0" />; }
 
 function AuditTab({ rows: initial }) {
   const getLog = useServerFn(getAuditLog);

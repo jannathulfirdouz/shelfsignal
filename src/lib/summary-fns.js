@@ -86,11 +86,17 @@ export const refreshWeek = createServerFn({ method: "POST" })
     const query = { ...scope, is_quarantined: { $ne: true }, date: { $gte: weekStart, $lt: weekEnd } };
     if (data.storeFilter) query.store_id = data.storeFilter;
 
-    const rows = await readAll(b, "SalesTransaction", query, ["invoice_no", "date", "txn_datetime", "store_id", "sku", "qty", "unit_price"]);
+    const rows = await readAll(b, "SalesTransaction", query, ["invoice_no", "date", "txn_datetime", "store_id", "sku", "qty", "unit_price", "country"]);
     const products = await loadProductsFull(b);
 
     const weekly = new Map();
     const hourly = new Map();
+    // Sales page figures, accumulated here so the page never scans transactions:
+    // net revenue by the month of the transaction date, category totals (with the
+    // outlier contribution the return rate excludes) and distinct orders by country.
+    const monthly = new Map();
+    const cats = new Map();
+    const countries = new Map();
     for (const r of rows) {
       const p = products.get(String(r.sku ?? "")) || { category: "Unknown", unit_cost: 0 };
       const cat = p.category || "Unknown";
@@ -108,6 +114,21 @@ export const refreshWeek = createServerFn({ method: "POST" })
       w.orders.add(r.invoice_no);
 
       const dt = parseDT(r.txn_datetime, r.date);
+      const monthKey = dt.toISOString().slice(0, 7);
+      monthly.set(monthKey, (monthly.get(monthKey) || 0) + lineNet);
+
+      let c = cats.get(cat);
+      if (!c) { c = { category: cat, net_revenue: 0, gross_revenue: 0, returns_value: 0, out_returns: 0, out_gross: 0 }; cats.set(cat, c); }
+      c.net_revenue += lineNet;
+      const absValue = Math.abs(qty) * price;
+      if (isRet) c.returns_value += absValue; else c.gross_revenue += qty * price;
+      if (Math.abs(qty) > 10000) { if (isRet) c.out_returns += absValue; else c.out_gross += qty * price; }
+
+      const ctry = r.country || "Unknown";
+      let inv = countries.get(ctry);
+      if (!inv) { inv = new Set(); countries.set(ctry, inv); }
+      inv.add(r.invoice_no);
+
       const wd = dt.getUTCDay();
       const hr = dt.getUTCHours();
       const hKey = `${r.store_id ?? ""}|${wd}|${hr}`;
@@ -140,13 +161,21 @@ export const refreshWeek = createServerFn({ method: "POST" })
     }
 
     const hourlyArr = [...hourly.values()].map((h) => ({ store_id: h.store_id, weekday: h.weekday, hour: h.hour, net_revenue: r2(h.net_revenue), orders: h.orders.size }));
-    return { weekStart, weeklyWrites: writes, hourly: hourlyArr, stopped, error };
+    const monthlyArr = [...monthly.entries()].map(([key, net]) => ({ key, net_revenue: r2(net) }));
+    const categoryArr = [...cats.values()].map((c) => ({ ...c, net_revenue: r2(c.net_revenue), gross_revenue: r2(c.gross_revenue), returns_value: r2(c.returns_value), out_returns: r2(c.out_returns), out_gross: r2(c.out_gross) }));
+    const countryArr = [...countries.entries()].map(([key, set]) => ({ key, orders: set.size }));
+    return { weekStart, weeklyWrites: writes, hourly: hourlyArr, monthly: monthlyArr, category: categoryArr, country: countryArr, stopped, error };
   });
 
 // ---- Finalize hourly: diff the small (<=504) global table --------------------
 export const finalizeHourly = createServerFn({ method: "POST" })
   .middleware([requireUser])
-  .validator(z.object({ rows: z.array(z.any()).max(2000) }))
+  .validator(z.object({
+    rows: z.array(z.any()).max(2000),
+    monthly: z.array(z.any()).max(600).optional(),
+    category: z.array(z.any()).max(600).optional(),
+    country: z.array(z.any()).max(600).optional(),
+  }))
   .handler(async ({ data, context }) => {
     if (!canRun(context.user)) throw forbid();
     const b = context.getBase44();
@@ -166,6 +195,33 @@ export const finalizeHourly = createServerFn({ method: "POST" })
       if (toCreate.length) { await b.entities.SalesHourSummary.bulkCreate(toCreate); writes += toCreate.length; }
       if (toUpdate.length) { await b.entities.SalesHourSummary.bulkUpdate(toUpdate); writes += toUpdate.length; }
     } catch (e) { if (isLimit(e)) return { writes, stopped: true, error: limitMsg }; throw e; }
+
+    // Sales page summary: monthly, category and country totals, written here so the
+    // unfiltered Sales view reads these small records instead of scanning transactions.
+    let salesError = null;
+    try {
+      const incoming = [
+        ...(data.monthly || []).map((m) => ({ kind: "monthly", key: m.key, net_revenue: m.net_revenue })),
+        ...(data.category || []).map((c) => ({ kind: "category", key: c.category, net_revenue: c.net_revenue, gross_revenue: c.gross_revenue, returns_value: c.returns_value, out_returns: c.out_returns, out_gross: c.out_gross })),
+        ...(data.country || []).map((c) => ({ kind: "country", key: c.key, orders: c.orders })),
+      ];
+      if (incoming.length) {
+        const existing = await readAll(b, "SalesSummary", {}, ["id", "kind", "key", "net_revenue", "gross_revenue", "returns_value", "out_returns", "out_gross", "orders"]);
+        const exMap = new Map(existing.map((x) => [`${x.kind}|${x.key}`, x]));
+        const numeric = ["net_revenue", "gross_revenue", "returns_value", "out_returns", "out_gross", "orders"];
+        const stamp = new Date().toISOString();
+        const toCreate = [];
+        const toUpdate = [];
+        for (const r of incoming) {
+          const ex = exMap.get(`${r.kind}|${r.key}`);
+          const row = { ...r, computed_at: stamp };
+          if (!ex) toCreate.push(row);
+          else if (numeric.some((f) => (ex[f] ?? null) !== (row[f] ?? null))) toUpdate.push({ id: ex.id, ...row });
+        }
+        if (toCreate.length) { await b.entities.SalesSummary.bulkCreate(toCreate); writes += toCreate.length; }
+        if (toUpdate.length) { await b.entities.SalesSummary.bulkUpdate(toUpdate); writes += toUpdate.length; }
+      }
+    } catch (e) { salesError = e?.data?.message || e?.message || "Sales summary not written"; }
 
     // Home KPI summary: one small record so Home reads it instead of scanning
     // transactions. Built from the weekly summary (already refreshed) plus two
@@ -208,7 +264,7 @@ export const finalizeHourly = createServerFn({ method: "POST" })
     try {
       await b.entities.AuditLog.create({ user: user.email || user.id, role: roleOf(user), action: "refresh_summaries", entity: "SalesWeeklySummary", record_ref: "", timestamp: new Date().toISOString(), detail: `${writes} hourly rows written` });
     } catch { /* best-effort */ }
-    return { writes, stopped: false, error: null, kpiError };
+    return { writes, stopped: false, error: null, kpiError, salesError };
   });
 
 // ---- When were summaries last refreshed? -----------------------------------

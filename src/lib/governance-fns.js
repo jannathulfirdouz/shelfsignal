@@ -18,11 +18,11 @@ async function audit(b, user, { action, entity, record_ref, detail }) {
 export const getGovernanceData = createServerFn({ method: "GET" })
   .middleware([allowAnonymous])
   .handler(async ({ context }) => {
-    // Signed-in owners and analysts get the full view; a public demo visitor gets the
-    // dictionary, metrics and lineage read-only, and never the audit log.
-    if (context.user && !canGovern(context.user)) throw forbid();
+    // Signed-in owners and analysts get the full view; a demo visitor, or a signed-in
+    // role without governance access, gets the dictionary, metrics and lineage
+    // read-only and never the audit log. Never an error: the demo must not see one.
     const b = context.getBase44();
-    const demo = !context.user;
+    const demo = !context.user || !canGovern(context.user);
     const seed = demo ? { created: 0, repaired: 0 } : await seedDictionary(b);
 
     let cursor;
@@ -104,8 +104,7 @@ export const getLineage = createServerFn({ method: "GET" })
   .validator(z.object({ kpi: z.enum(["net_revenue", "gross_margin", "return_rate", "stock_cover"]) }))
   .handler(async ({ data, context }) => {
     // Read-only lineage is open to demo visitors too: aggregate counts only, and
-    // never a user's details. A signed-in non-governance role is still refused.
-    if (context.user && !canGovern(context.user)) throw forbid();
+    // never a user's details. Nobody is refused here, so a demo sees no error.
     const b = context.getBase44();
     const scope = storeScope(context.user);
     const meta = KPI_MAP[data.kpi];

@@ -20,6 +20,11 @@ const IMPACT_RULE = {
   re_engage: "Expected impact = the customer's historic monetary value (quantity × unit price across all orders).",
 };
 
+// A rising-trend investigate card is driven by a forecast, not by flagged trading
+// days, so it carries the trend definition instead of the anomaly one.
+const RISING_TREND_RULE =
+  "Expected impact = (forecast average units per week minus the last 8 weeks' average units) × 8 weeks × unit price. It is the size of the sales gap the trend implies, not revenue already earned.";
+
 export function RecommendationCard({ rec, canDecide, canExplain = true, onDecide, busy }) {
   const explain = useServerFn(explainRecommendation);
   const [note, setNote] = useState("");
@@ -28,6 +33,7 @@ export function RecommendationCard({ rec, canDecide, canExplain = true, onDecide
   const [explaining, setExplaining] = useState(false);
   const [err, setErr] = useState(null);
   const decided = rec.status !== "new";
+  const impactRule = rec.type === "investigate" && rec.metrics?.weekly_forecast != null ? RISING_TREND_RULE : IMPACT_RULE[rec.type];
 
   const explainWithAI = async () => {
     setExplaining(true); setErr(null);
@@ -51,12 +57,12 @@ export function RecommendationCard({ rec, canDecide, canExplain = true, onDecide
           </div>
           <div className="text-right">
             <p className="text-lg font-semibold">£{Number(rec.expected_impact_gbp || 0).toLocaleString("en-GB")}</p>
-            <p title={IMPACT_RULE[rec.type] || ""} className="cursor-help text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2">expected impact · {rec.store_id}</p>
+            <p title={impactRule || ""} className="cursor-help text-[11px] text-muted-foreground underline decoration-dotted underline-offset-2">expected impact · {rec.store_id}</p>
           </div>
         </div>
 
         <p className="text-sm text-muted-foreground">{rec.reason}</p>
-        <p className="text-[11px] text-muted-foreground">{IMPACT_RULE[rec.type] || "No impact definition for this type."}</p>
+        <p className="text-[11px] text-muted-foreground">{impactRule || "No impact definition for this type."}</p>
 
         {explanation && (
           <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm">

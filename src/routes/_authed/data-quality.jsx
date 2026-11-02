@@ -33,9 +33,13 @@ function DataQualityPage() {
   const [summariesAt, setSummariesAt] = useState(null);
   const [showAll, setShowAll] = useState(false);
 
-  useEffect(() => { getSummary({ data: {} }).then(setSummariesAt).catch(() => {}); }, [refreshKey]);
   const role = user?.app_role || user?.data?.app_role || "viewer";
   const canAct = role === "owner" || role === "analyst";
+  // Restricted call: a demo visitor must not trigger it (it needs a signed-in caller).
+  useEffect(() => {
+    if (!user) return;
+    getSummary({ data: {} }).then(setSummariesAt).catch(() => {});
+  }, [refreshKey, user, getSummary]);
   const batch = data.batch;
   // Failed and superseded imports stay hidden unless the visitor asks for them.
   const completed = data.batches.filter((b) => b.status === "completed");

@@ -25,6 +25,9 @@ export function RefreshSummariesPanel({ onDone, lastRefreshedAt }) {
   const [pct, setPct] = useState(0);
   const [message, setMessage] = useState(null);
   const hourRef = useRef(new Map());
+  const monthRef = useRef(new Map());
+  const catRef = useRef(new Map());
+  const countryRef = useRef(new Map());
   const writesRef = useRef(0);
 
   async function start() {
@@ -38,7 +41,8 @@ export function RefreshSummariesPanel({ onDone, lastRefreshedAt }) {
   }
 
   async function confirm() {
-    setPhase("running"); setMessage(null); writesRef.current = 0; hourRef.current = new Map();
+    setPhase("running"); setMessage(null); writesRef.current = 0;
+    hourRef.current = new Map(); monthRef.current = new Map(); catRef.current = new Map(); countryRef.current = new Map();
     const weeks = plan.weeks || [];
     let done = 0;
     let stopped = false;
@@ -57,6 +61,16 @@ export function RefreshSummariesPanel({ onDone, lastRefreshedAt }) {
         if (ex) { ex.net_revenue += h.net_revenue; ex.orders += h.orders; }
         else hourRef.current.set(k, { store_id: h.store_id, weekday: h.weekday, hour: h.hour, net_revenue: h.net_revenue, orders: h.orders });
       }
+      // Sales page figures accumulate the same way the hourly table does.
+      for (const m of res.monthly || []) monthRef.current.set(m.key, (monthRef.current.get(m.key) || 0) + (m.net_revenue || 0));
+      for (const c of res.category || []) {
+        const ex = catRef.current.get(c.category);
+        if (ex) {
+          ex.net_revenue += c.net_revenue || 0; ex.gross_revenue += c.gross_revenue || 0;
+          ex.returns_value += c.returns_value || 0; ex.out_returns += c.out_returns || 0; ex.out_gross += c.out_gross || 0;
+        } else catRef.current.set(c.category, { ...c });
+      }
+      for (const c of res.country || []) countryRef.current.set(c.key, (countryRef.current.get(c.key) || 0) + (c.orders || 0));
       done += 1;
       setPct(Math.round((done / (weeks.length || 1)) * 90));
       if (res.stopped) { stopped = true; setMessage({ tone: "error", text: res.error || "Stopped at the daily write limit." }); break; }
@@ -64,7 +78,14 @@ export function RefreshSummariesPanel({ onDone, lastRefreshedAt }) {
     if (!stopped) {
       setPct(95);
       try {
-        const fin = await finishHourly({ data: { rows: [...hourRef.current.values()] } });
+        const fin = await finishHourly({
+          data: {
+            rows: [...hourRef.current.values()],
+            monthly: [...monthRef.current.entries()].map(([key, net_revenue]) => ({ key, net_revenue })),
+            category: [...catRef.current.values()],
+            country: [...countryRef.current.entries()].map(([key, orders]) => ({ key, orders })),
+          },
+        });
         writesRef.current += fin.writes || 0;
         if (fin.stopped) setMessage({ tone: "error", text: fin.error || "Stopped at the daily write limit." });
         else setMessage({ tone: "ok", text: `Summaries refreshed: ${weeks.length} weeks processed, ${writesRef.current.toLocaleString("en-GB")} records written.` });

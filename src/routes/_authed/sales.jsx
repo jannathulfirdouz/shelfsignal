@@ -6,6 +6,7 @@ import { getAnomalies } from "@/lib/ml-fns";
 import { useAuth } from "@/lib/AuthContext";
 import { PageHeader } from "@/components/PageHeader";
 import { PageFilters } from "@/components/PageFilters";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ComposedChart, Bar, Line, Cell, LabelList, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, BarChart } from "recharts";
@@ -17,15 +18,13 @@ export const Route = createFileRoute("/_authed/sales")({
     category: typeof s.category === "string" ? s.category : undefined,
     range: ["4w", "12w", "ytd", "all"].includes(s.range) ? s.range : undefined,
   }),
-  loaderDeps: ({ search }) => ({ store: search.store, category: search.category, range: search.range }),
-  loader: ({ deps }) => getSalesAnalytics({ data: deps }),
   head: () => ({ meta: [{ title: "Sales · ShelfSignal" }] }),
   component: SalesPage,
 });
 
 function SalesPage() {
-  const data = Route.useLoaderData();
   const navigate = useNavigate();
+  const fetchSales = useServerFn(getSalesAnalytics);
   const { user } = useAuth();
   const role = user?.app_role || user?.data?.app_role || "viewer";
   const lockStore = role === "store_manager";
@@ -34,10 +33,70 @@ function SalesPage() {
 
   const [excludeUK, setExcludeUK] = useState(false);
   const [includeOutliers, setIncludeOutliers] = useState(false);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [attempt, setAttempt] = useState(0);
 
   const getAnoms = useServerFn(getAnomalies);
   const [anoms, setAnoms] = useState([]);
   useEffect(() => { getAnoms({ data: { storeId: search.store } }).then(setAnoms).catch(() => setAnoms([])); }, [search.store]);
+
+  // One automatic retry, so a slow first query recovers without the visitor
+  // pressing anything. A loading state shows until the answer is in.
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    setLoadError(null);
+    (async () => {
+      try {
+        let res;
+        try {
+          res = await fetchSales({ data: filters });
+        } catch {
+          await new Promise((r) => setTimeout(r, 800));
+          res = await fetchSales({ data: filters });
+        }
+        if (alive) setData(res);
+      } catch (e) {
+        if (alive) setLoadError(e?.data?.message || e?.message || "Could not load Sales.");
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.store, filters.category, filters.range, attempt, fetchSales]);
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="Sales" subtitle="Revenue trends and mix. All figures in GBP (£)." />
+        <Skeleton className="h-72 rounded-xl" />
+        <div className="grid gap-6 lg:grid-cols-2">
+          {[0, 1].map((i) => <Skeleton key={i} className="h-64 rounded-xl" />)}
+        </div>
+        <Skeleton className="h-56 rounded-xl" />
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="Sales" subtitle="Revenue trends and mix. All figures in GBP (£)." />
+        <Card>
+          <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
+            <p className="text-sm text-muted-foreground">{loadError}</p>
+            <Button size="sm" onClick={() => setAttempt((n) => n + 1)}>Try again</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!data) return null;
+
   // Anomaly days are counted per calendar month and shown above that month's bar,
   // so the badge sits on the month the anomaly belongs to (dates are per day).
   const anomalyByMonth = anoms.reduce((m, a) => { const k = String(a.date).slice(0, 7); m[k] = (m[k] || 0) + 1; return m; }, {});

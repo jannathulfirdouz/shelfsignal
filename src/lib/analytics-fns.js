@@ -66,6 +66,18 @@ function returnRatePair(sums, out) {
   return { excl, incl };
 }
 
+// Sums month buckets and adds the month-on-month change to each row.
+function monthlyWithChange(list) {
+  const map = new Map();
+  for (const w of list) map.set(w.month, (map.get(w.month) || 0) + w.netRevenue);
+  const monthly = [...map.entries()].sort((a, b2) => (a[0] < b2[0] ? -1 : 1)).map(([month, netRevenue]) => ({ month, netRevenue: r2(netRevenue) }));
+  for (let i = 0; i < monthly.length; i++) {
+    const prev = monthly[i - 1];
+    monthly[i].momChange = prev ? r2((monthly[i].netRevenue - prev.netRevenue) / (prev.netRevenue || 1) * 100) : null;
+  }
+  return monthly;
+}
+
 // Orders = distinct invoice_no over non-quarantined transactions (single aggregate).
 async function orderCount(b, scope, f, from, to) {
   const q = { ...scope, is_quarantined: { $ne: true } };
@@ -112,6 +124,7 @@ const METRICS = [
   { name: "Reorder impact (GBP)", formula: "Shortfall units (reorder point minus on-hand and on-order units, floored at zero) times unit price.", owner: "ShelfSignal", notes: "Reorder recommendations in the Action centre." },
   { name: "Markdown impact (GBP)", formula: "On-hand units at risk of write-off times unit cost.", owner: "ShelfSignal", notes: "Markdown recommendations in the Action centre." },
   { name: "Investigate impact (GBP)", formula: "Absolute difference between actual and expected revenue on the flagged days, summed.", owner: "ShelfSignal", notes: "Investigate recommendations in the Action centre." },
+  { name: "Rising-trend impact (GBP)", formula: "(Forecast average units per week minus the last 8 weeks' average units) times 8 weeks times unit price.", owner: "ShelfSignal", notes: "Investigate recommendations raised from a rising-trend forecast flag." },
   { name: "Re-engage impact (GBP)", formula: "The customer's historic monetary value (quantity times unit price across all orders).", owner: "ShelfSignal", notes: "Re-engage recommendations in the Action centre." },
 ];
 
@@ -237,42 +250,68 @@ export const getSalesAnalytics = createServerFn({ method: "GET" })
     const { from, to } = rangeToDates(data.range, maxDate);
     const wq = weeklyQuery(scope, f, from, to);
 
-    const wkAgg = await b.entities.SalesWeeklySummary.aggregate({ query: wq, groupBy: "week_start", sum: ["net_revenue"] });
-    const byWeek = (wkAgg.rows ?? []).map((r) => ({ week: r.week_start, netRevenue: Number(r.sum_net_revenue || 0) })).sort((a, b2) => (a.week < b2.week ? -1 : 1));
-    // Each week is counted in the month that holds most of its days (its Thursday),
-    // so the week starting 29 Nov 2010 is December's first week rather than a
-    // separate November. Month-on-month change compares whole calendar months.
-    const monthlyMap = new Map();
-    for (const w of byWeek) {
-      const mid = new Date(w.week + "T00:00:00Z");
-      mid.setUTCDate(mid.getUTCDate() + 3);
-      const m = mid.toISOString().slice(0, 7);
-      monthlyMap.set(m, (monthlyMap.get(m) || 0) + w.netRevenue);
-    }
-    const monthly = [...monthlyMap.entries()].sort((a, b2) => (a[0] < b2[0] ? -1 : 1)).map(([month, netRevenue]) => ({ month, netRevenue: r2(netRevenue) }));
-    for (let i = 0; i < monthly.length; i++) {
-      const prev = monthly[i - 1];
-      monthly[i].momChange = prev ? r2((monthly[i].netRevenue - prev.netRevenue) / (prev.netRevenue || 1) * 100) : null;
+    // The unfiltered public view reads the small summary records written by
+    // "Refresh summaries" instead of scanning transactions; any filter uses the live path.
+    const useSummary = !f.store && !f.category && (!data.range || data.range === "all") && Object.keys(scope).length === 0;
+    const summaryRows = useSummary
+      ? await readAll(b, "SalesSummary", {}, ["kind", "key", "net_revenue", "gross_revenue", "returns_value", "out_returns", "out_gross", "orders"])
+      : [];
+    const fromSummary = summaryRows.length > 0;
+    const summaryCats = summaryRows.filter((r) => r.kind === "category");
+
+    let monthly;
+    if (fromSummary) {
+      // Month buckets are written from the transaction date itself during the refresh.
+      monthly = monthlyWithChange(summaryRows.filter((r) => r.kind === "monthly").map((r) => ({ month: r.key, netRevenue: Number(r.net_revenue) || 0 })));
+    } else {
+      const wkAgg = await b.entities.SalesWeeklySummary.aggregate({ query: wq, groupBy: "week_start", sum: ["net_revenue"] });
+      const byWeek = (wkAgg.rows ?? []).map((r) => ({ week: r.week_start, netRevenue: Number(r.sum_net_revenue || 0) })).sort((a, b2) => (a.week < b2.week ? -1 : 1));
+      // Each week is counted in the month that holds most of its days (its Thursday),
+      // so the week starting 29 Nov 2010 is December's first week rather than a
+      // separate November. Month-on-month change compares whole calendar months.
+      monthly = monthlyWithChange(byWeek.map((w) => {
+        const mid = new Date(w.week + "T00:00:00Z");
+        mid.setUTCDate(mid.getUTCDate() + 3);
+        return { month: mid.toISOString().slice(0, 7), netRevenue: w.netRevenue };
+      }));
     }
     // The data ends 9 Dec 2011, so December is a partial month.
     const partialMonth = maxDate && Number(maxDate.slice(8)) < 28 ? maxDate.slice(0, 7) : null;
 
-    const catAgg = await b.entities.SalesWeeklySummary.aggregate({ query: wq, groupBy: "category", sum: ["net_revenue"] });
-    const revenueByCategory = (catAgg.rows ?? []).map((r) => ({ category: r.category, netRevenue: r2(Number(r.sum_net_revenue || 0)) })).sort((a, b2) => b2.netRevenue - a.netRevenue);
+    let revenueByCategory;
+    if (fromSummary) {
+      revenueByCategory = summaryCats.map((r) => ({ category: r.key, netRevenue: r2(Number(r.net_revenue) || 0) })).sort((a, b2) => b2.netRevenue - a.netRevenue);
+    } else {
+      const catAgg = await b.entities.SalesWeeklySummary.aggregate({ query: wq, groupBy: "category", sum: ["net_revenue"] });
+      revenueByCategory = (catAgg.rows ?? []).map((r) => ({ category: r.category, netRevenue: r2(Number(r.sum_net_revenue || 0)) })).sort((a, b2) => b2.netRevenue - a.netRevenue);
+    }
 
-    const retAgg = await b.entities.SalesWeeklySummary.aggregate({ query: wq, groupBy: "category", sum: ["returns_value", "gross_revenue"] });
-    const products = await loadProductsMap(b);
-    const out = await outlierContribs(b, products, scope, f, from, to);
-    const returnRateByCategory = (retAgg.rows ?? []).map((r) => {
-      const cat = r.category || "Unknown";
-      const gross = Number(r.sum_gross_revenue || 0);
-      const returns = Number(r.sum_returns_value || 0);
-      const incl = gross ? r2(returns / gross * 100) : 0;
-      const oc = out.byCat[cat] || { returns: 0, gross: 0 };
-      const adjGross = gross - oc.gross;
-      const excl = adjGross ? r2((returns - oc.returns) / adjGross * 100) : 0;
-      return { category: cat, returnRateExcl: excl, returnRateIncl: incl };
-    }).sort((a, b2) => b2.returnRateExcl - a.returnRateExcl);
+    let returnRateByCategory;
+    if (fromSummary) {
+      // The outlier contribution is accumulated during the refresh, so no transaction scan.
+      returnRateByCategory = summaryCats.map((c) => {
+        const gross = Number(c.gross_revenue) || 0;
+        const returns = Number(c.returns_value) || 0;
+        const incl = gross ? r2(returns / gross * 100) : 0;
+        const adjGross = gross - (Number(c.out_gross) || 0);
+        const excl = adjGross ? r2((returns - (Number(c.out_returns) || 0)) / adjGross * 100) : 0;
+        return { category: c.key, returnRateExcl: excl, returnRateIncl: incl };
+      }).sort((a, b2) => b2.returnRateExcl - a.returnRateExcl);
+    } else {
+      const retAgg = await b.entities.SalesWeeklySummary.aggregate({ query: wq, groupBy: "category", sum: ["returns_value", "gross_revenue"] });
+      const products = await loadProductsMap(b);
+      const out = await outlierContribs(b, products, scope, f, from, to);
+      returnRateByCategory = (retAgg.rows ?? []).map((r) => {
+        const cat = r.category || "Unknown";
+        const gross = Number(r.sum_gross_revenue || 0);
+        const returns = Number(r.sum_returns_value || 0);
+        const incl = gross ? r2(returns / gross * 100) : 0;
+        const oc = out.byCat[cat] || { returns: 0, gross: 0 };
+        const adjGross = gross - oc.gross;
+        const excl = adjGross ? r2((returns - oc.returns) / adjGross * 100) : 0;
+        return { category: cat, returnRateExcl: excl, returnRateIncl: incl };
+      }).sort((a, b2) => b2.returnRateExcl - a.returnRateExcl);
+    }
 
     const skuAgg = await b.entities.SalesWeeklySummary.aggregate({ query: wq, groupBy: "sku", sum: ["net_revenue"] });
     const skuRows = (skuAgg.rows ?? []).map((r) => ({ sku: r.sku, revenue: Number(r.sum_net_revenue || 0) })).sort((a, b2) => b2.revenue - a.revenue);
@@ -283,15 +322,24 @@ export const getSalesAnalytics = createServerFn({ method: "GET" })
 
     // Top countries by distinct orders (not transaction rows). Fetch a few extra so
     // the client-side "Exclude United Kingdom" toggle still has 10 to show.
-    const countryQ = { ...scope, is_quarantined: { $ne: true } };
-    if (f.store) countryQ.store_id = f.store;
-    if (from) countryQ.date = { ...(countryQ.date || {}), $gte: from };
-    if (to) countryQ.date = { ...(countryQ.date || {}), $lte: to };
-    const countryAgg = await b.entities.SalesTransaction.aggregate({ query: countryQ, groupBy: "country", countDistinct: "invoice_no" });
-    const topCountries = (countryAgg.rows ?? [])
-      .map((r) => ({ country: r.country || "Unknown", orders: Number(r.count_distinct_invoice_no || 0) }))
-      .sort((a, b2) => b2.orders - a.orders)
-      .slice(0, 15);
+    let topCountries;
+    if (fromSummary) {
+      topCountries = summaryRows
+        .filter((r) => r.kind === "country")
+        .map((r) => ({ country: r.key, orders: Number(r.orders) || 0 }))
+        .sort((a, b2) => b2.orders - a.orders)
+        .slice(0, 15);
+    } else {
+      const countryQ = { ...scope, is_quarantined: { $ne: true } };
+      if (f.store) countryQ.store_id = f.store;
+      if (from) countryQ.date = { ...(countryQ.date || {}), $gte: from };
+      if (to) countryQ.date = { ...(countryQ.date || {}), $lte: to };
+      const countryAgg = await b.entities.SalesTransaction.aggregate({ query: countryQ, groupBy: "country", countDistinct: "invoice_no" });
+      topCountries = (countryAgg.rows ?? [])
+        .map((r) => ({ country: r.country || "Unknown", orders: Number(r.count_distinct_invoice_no || 0) }))
+        .sort((a, b2) => b2.orders - a.orders)
+        .slice(0, 15);
+    }
 
     const hourlyQ = { ...scope };
     if (f.store) hourlyQ.store_id = f.store;

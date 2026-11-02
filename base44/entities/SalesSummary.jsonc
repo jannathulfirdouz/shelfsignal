@@ -1,0 +1,78 @@
+{
+  "name": "SalesSummary",
+  "type": "object",
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": [
+        "monthly",
+        "category",
+        "country"
+      ]
+    },
+    "key": {
+      "type": "string"
+    },
+    "net_revenue": {
+      "type": "number"
+    },
+    "gross_revenue": {
+      "type": "number"
+    },
+    "returns_value": {
+      "type": "number"
+    },
+    "out_returns": {
+      "type": "number"
+    },
+    "out_gross": {
+      "type": "number"
+    },
+    "orders": {
+      "type": "number"
+    },
+    "computed_at": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "kind",
+    "key"
+  ],
+  "rls": {
+    "read": {},
+    "create": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "update": {
+      "$or": [
+        {
+          "user_condition": {
+            "data.app_role": "owner"
+          }
+        },
+        {
+          "user_condition": {
+            "data.app_role": "analyst"
+          }
+        }
+      ]
+    },
+    "delete": {
+      "user_condition": {
+        "data.app_role": "owner"
+      }
+    }
+  }
+}
